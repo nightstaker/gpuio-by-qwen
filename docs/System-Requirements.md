@@ -333,7 +333,21 @@ Outcome: Efficient long-context LLM inference
 Metrics: Support 128K context with <20% overhead
 ```
 
-**Use Case UC-2.4.3: Graph Traversal [LOW PRIORITY]**
+**Use Case UC-2.4.3: DeepSeek DSA Attention KV Cache Management [HIGH PRIORITY]**
+```
+Actor: DeepSeek LLM with Dynamic Sparse Attention (DSA)
+Trigger: Attention mechanism requires selective KV cache access
+Flow:
+  1. DSA algorithm identifies relevant KV cache entries via sparse patterns
+  2. gpuio selectively loads only active attention heads' KV pairs
+  3. Compressed KV cache stored in CXL/remote memory
+  4. On-demand decompression and loading during attention
+  5. Eviction policy preserves high-value KV entries per DSA importance scores
+Outcome: 10x reduction in KV cache memory footprint
+Metrics: Support 1M+ context with <5GB KV cache, <2ms access latency
+```
+
+**Use Case UC-2.4.4: Graph Traversal [LOW PRIORITY]**
 ```
 Actor: Graph traversal algorithms on social networks
 Trigger: BFS frontier expands to new vertices
@@ -438,6 +452,20 @@ Flow:
   4. Aggregate to produce new global model
 Outcome: Efficient federated learning communication
 Metrics: Aggregate 10K client updates in <1s
+```
+
+**Use Case UC-3.2.3: Graph Database Retrieval for Knowledge-Augmented LLMs [HIGH PRIORITY]**
+```
+Actor: RAG-based LLM system with graph knowledge base
+Trigger: LLM needs structured knowledge from graph database
+Flow:
+  1. Query embedder generates vector representation of question
+  2. gpuio scatter operation retrieves candidate nodes via vector similarity
+  3. Gather operation fetches multi-hop neighbor subgraphs
+  4. Edge and node attributes assembled in GPU memory
+  5. Graph attention layers process retrieved subgraph
+Outcome: Efficient knowledge retrieval from billion-node graphs
+Metrics: Retrieve relevant subgraph (1000 nodes) in <10ms from 10B node graph
 ```
 
 #### FR-3.3: Batched IO Requests
@@ -593,6 +621,20 @@ Flow:
   4. Cold embeddings accessed via CXL
 Outcome: Multi-TB embedding tables accessible from GPU
 Metrics: Support 50TB embedding tables
+```
+
+**Use Case UC-4.2.3: DeepSeek Engram Memory Architecture [HIGH PRIORITY]**
+```
+Actor: DeepSeek LLM with Engram-based external memory
+Trigger: Model needs to access long-term factual knowledge
+Flow:
+  1. Engram memory pool allocated across CXL/CPU DRAM
+  2. GPU kernel queries engram index via learned addressing
+  3. gpuio fetches relevant engram chunks on-demand
+  4. Attention mechanism reads from engram memory via load/store
+  5. Write-back of new engrams via GPU-initiated stores
+Outcome: Petabyte-scale external memory for LLMs
+Metrics: Access 1PB engram storage with <100μs latency, 10M engrams/second
 ```
 
 ##### FR-4.3: Load/Store Memory Semantics
