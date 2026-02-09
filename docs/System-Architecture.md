@@ -770,8 +770,226 @@ Application                     gpuio Runtime                      Destination
 
 ---
 
-## 9. Document History
+## 9. Advanced AI/ML Architecture Patterns
+
+### 9.1 DeepSeek DSA Attention KV Cache Architecture
+
+DeepSeek's Dynamic Sparse Attention (DSA) requires specialized KV cache management:
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    DSA KV Cache Architecture                                 │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  ┌────────────────────────────────────────────────────────────────────────┐ │
+│  │                     Sparse Pattern Analyzer                             │ │
+│  │  • Identifies active attention heads via learned sparsity patterns     │ │
+│  │  • Computes importance scores for KV entries                           │ │
+│  │  • Generates compact sparse indices                                    │ │
+│  └───────────────────────────────┬────────────────────────────────────────┘ │
+│                                  │                                           │
+│                                  ▼                                           │
+│  ┌────────────────────────────────────────────────────────────────────────┐ │
+│  │                    Selective KV Cache Loader                            │ │
+│  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐                    │ │
+│  │  │   Sparse    │  │  On-Demand  │  │  Compressed │                    │ │
+│  │  │   Index     │──►│    Fetch    │──►│  Decode     │                    │ │
+│  │  │   Lookup    │  │  (gpuio)    │  │  (GPU)      │                    │ │
+│  │  └─────────────┘  └─────────────┘  └─────────────┘                    │ │
+│  └────────────────────────────────────────────────────────────────────────┘ │
+│                                  │                                           │
+│                    ┌─────────────┼─────────────┐                             │
+│                    ▼             ▼             ▼                             │
+│  ┌─────────────────────┐ ┌─────────────┐ ┌─────────────────────┐            │
+│  │   GPU HBM Cache     │ │  CXL Memory │ │   Remote Storage    │            │
+│  │   (Hot KV Pairs)    │ │  (Warm KV)  │ │   (Cold KV Archive) │            │
+│  │                     │ │             │ │                     │            │
+│  │  • Active heads     │ │  • Recent   │ │  • Historical       │            │
+│  │  • 5-10GB capacity  │ │    context  │ │    contexts         │            │
+│  │  • <100ns access    │ │  • 100GB+   │ │  • PB scale         │            │
+│  └─────────────────────┘ └─────────────┘ └─────────────────────┘            │
+│                                                                              │
+│  ┌────────────────────────────────────────────────────────────────────────┐ │
+│  │                    Importance-Aware Eviction                            │ │
+│  │  • LRU enhanced with DSA importance scores                             │ │
+│  │  • High-importance KV pairs pinned in HBM                              │ │
+│  │  • Low-importance candidates for compression/migration                 │ │
+│  └────────────────────────────────────────────────────────────────────────┘ │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+**Key Features:**
+- **Sparse Indexing**: Only fetch KV pairs for active attention heads
+- **Tiered Storage**: Hot (HBM) → Warm (CXL) → Cold (Remote)
+- **Compression**: GPU-accelerated KV cache compression/decompression
+- **10x Memory Reduction**: Support 1M+ context with <5GB footprint
+
+### 9.2 Graph Database Retrieval Architecture (Graph RAG)
+
+Knowledge-augmented LLMs with graph database integration:
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    Graph RAG Architecture                                    │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  Query Processing:                                                           │
+│  ┌────────────────────────────────────────────────────────────────────────┐ │
+│  │  User Query ──► Query Encoder ──► Vector Embedding                     │ │
+│  └─────────────────────────────────┬──────────────────────────────────────┘ │
+│                                    │                                         │
+│                                    ▼                                         │
+│  ┌────────────────────────────────────────────────────────────────────────┐ │
+│  │                    Vector Similarity Scatter                            │ │
+│  │                                                                          │ │
+│  │  ┌───────────────────────────────────────────────────────────────────┐  │ │
+│  │  │  gpuio.scatter(                                                   │  │ │
+│  │  │    indices = vector_search(query_emb, graph_index),               │  │ │
+│  │  │    source = graph_db_remote,                                     │  │ │
+│  │  │    destination = gpu_candidate_buffer                            │  │ │
+│  │  │  )                                                                │  │ │
+│  │  └───────────────────────────────────────────────────────────────────┘  │ │
+│  │                                                                          │ │
+│  │  • Parallel ANN search across graph partitions                         │ │
+│  │  • Retrieve top-K candidate nodes (1000s per query)                    │ │
+│  │  • gpuio optimizes scatter pattern for NVMe/RDMA                       │ │
+│  └────────────────────────────────────────────────────────────────────────┘ │
+│                                    │                                         │
+│                                    ▼                                         │
+│  ┌────────────────────────────────────────────────────────────────────────┐ │
+│  │                    Multi-Hop Subgraph Gather                            │ │
+│  │                                                                          │ │
+│  │  ┌───────────────────────────────────────────────────────────────────┐  │ │
+│  │  │  gpuio.gather(                                                    │  │ │
+│  │  │    root_nodes = candidates,                                       │  │ │
+│  │  │    hop_depth = 2-3,                                               │  │ │
+│  │  │    edge_types = ["related_to", "part_of", ...],                   │  │ │
+│  │  │    destination = gpu_subgraph_buffer                               │  │ │
+│  │  │  )                                                                │  │ │
+│  │  └───────────────────────────────────────────────────────────────────┘  │ │
+│  │                                                                          │ │
+│  │  • Expand candidate set via graph traversal                            │ │
+│  │  • Fetch node attributes and edge properties                           │ │
+│  │  • Assemble subgraph in GPU memory (1000s nodes)                       │ │
+│  └────────────────────────────────────────────────────────────────────────┘ │
+│                                    │                                         │
+│                                    ▼                                         │
+│  ┌────────────────────────────────────────────────────────────────────────┐ │
+│  │                    Graph Attention Processing                           │ │
+│  │  • GNN layers process retrieved subgraph                               │ │
+│  │  • Cross-attention between query and graph nodes                       │ │
+│  │  • Generate context-aware response                                     │ │
+│  └────────────────────────────────────────────────────────────────────────┘ │
+│                                                                              │
+│  Performance Targets:                                                        │
+│  • Subgraph retrieval: <10ms from 10B node graph                           │
+│  • Scatter throughput: 1M+ nodes/second                                    │
+│  • Gather efficiency: Minimize redundant fetches                           │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### 9.3 DeepSeek Engram Memory Architecture
+
+Petabyte-scale external memory for LLMs:
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    Engram Memory Architecture                                │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  ┌────────────────────────────────────────────────────────────────────────┐ │
+│  │                    Learned Engram Addressing                            │ │
+│  │                                                                          │ │
+│  │   Query ──► Engram Router ──► Physical Location                        │ │
+│  │              (Neural Index)                                            │ │
+│  │                                                                          │ │
+│  │   • Content-addressable memory via learned hash                        │ │
+│  │   • Predictive routing to engram shards                                │ │
+│  │   • Handles 10M+ engrams/second lookup rate                            │ │
+│  └───────────────────────────────┬────────────────────────────────────────┘ │
+│                                  │                                           │
+│                    ┌─────────────┼─────────────┐                             │
+│                    ▼             ▼             ▼                             │
+│  ┌─────────────────────┐ ┌─────────────┐ ┌─────────────────────┐            │
+│  │   Engram Cache      │ │  Engram     │ │   Engram            │            │
+│  │   (GPU HBM)         │ │  Pool       │ │   Archive           │            │
+│  │                     │ │  (CXL)      │ │   (Distributed)     │            │
+│  │  • Working set      │ │             │ │                     │            │
+│  │  • 100GB capacity   │ │  • 1-10TB   │ │  • Petabyte scale   │            │
+│  │  • <100ns access    │ │  • <100μs   │ │  • <1ms (cached)    │            │
+│  │                     │ │             │ │                     │            │
+│  │  gpuio: on-demand   │ │  gpuio:     │ │  gpuio:             │            │
+│  │  load via page      │ │  direct     │ │  prefetch + cache   │            │
+│  │  fault handler      │ │  load/store │ │                     │            │
+│  └─────────────────────┘ └─────────────┘ └─────────────────────┘            │
+│                                                                              │
+│  Engram Operations (GPU-Initiated):                                          │
+│  ┌────────────────────────────────────────────────────────────────────────┐ │
+│  │                                                                          │ │
+│  │  READ:  engram = gpuio_engram_read(engram_id, query_vector)            │ │
+│  │         └──► Neural router ──► Fetch from tiered storage ──► GPU       │ │
+│  │                                                                          │ │
+│  │  WRITE: gpuio_engram_write(engram_id, data, importance_score)          │ │
+│  │         └──► Async write-through to CXL + async archive                │ │
+│  │                                                                          │ │
+│  │  QUERY: results = gpuio_engram_query(query_emb, top_k=100)             │ │
+│  │         └──► Vector search across engram shards ──► Rank ──► Return    │ │
+│  │                                                                          │ │
+│  └────────────────────────────────────────────────────────────────────────┘ │
+│                                                                              │
+│  Coherence Model:                                                            │
+│  ┌────────────────────────────────────────────────────────────────────────┐ │
+│  │  • Engrams versioned with training step                                │ │
+│  │  • Stale engrams invalidated on model update                           │ │
+│  │  • Write-through to CXL ensures durability                             │ │
+│  │  • Async replication to archive for long-term storage                  │ │
+│  └────────────────────────────────────────────────────────────────────────┘ │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### 9.4 Integration Patterns
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│              Combined AI Workload Integration                                │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  Training with Engram + DSA:                                                 │
+│  ┌─────────────┐    ┌─────────────┐    ┌─────────────┐    ┌─────────────┐  │
+│  │   Forward   │───►│  Engram     │───►│   DSA       │───►│   Output    │  │
+│  │   Pass      │    │  Lookup     │    │  Attention  │    │  Logits     │  │
+│  └─────────────┘    └─────────────┘    └─────────────┘    └─────────────┘  │
+│                            │                                                 │
+│                            ▼                                                 │
+│                     gpuio: on-demand engram fetch                            │
+│                     gpuio: selective KV cache load                           │
+│                                                                              │
+│  Inference with Graph RAG + Engram:                                          │
+│  ┌─────────────┐    ┌─────────────┐    ┌─────────────┐    ┌─────────────┐  │
+│  │   Query     │───►│  Graph      │───►│  Engram     │───►│  LLM        │  │
+│  │   Encode    │    │  RAG        │    │  Context    │    │  Generate   │  │
+│  └─────────────┘    └─────────────┘    └─────────────┘    └─────────────┘  │
+│                            │                      │                          │
+│                            ▼                      ▼                          │
+│                     gpuio: scatter-gather        gpuio: engram read          │
+│                                                                              │
+│  Unified Resource Management:                                                │
+│  • Shared CXL pool for KV cache, engrams, and graph data                   │
+│  • Unified cache tiering across all AI components                          │
+│  • Priority-based resource allocation (training > inference)               │
+│  • Dynamic migration based on access patterns                              │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 10. Document History
 
 | Version | Date | Author | Changes |
 |---------|------|--------|---------|
 | 1.0 | 2026-02-09 | gpuio Team | Initial architecture |
+| 1.1 | 2026-02-09 | gpuio Team | Added DeepSeek-specific AI/ML architecture patterns (DSA, Engram, Graph RAG) |

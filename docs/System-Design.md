@@ -862,8 +862,342 @@ Zero-Copy Paths:
 
 ---
 
-## 10. Document History
+## 10. DeepSeek-Specific Design Extensions
+
+### 10.1 DSA KV Cache Data Structures
+
+```c
+/* DSA (Dynamic Sparse Attention) KV Cache Entry */
+typedef struct {
+    uint64_t engram_id;             /* Unique identifier */
+    uint32_t head_id;               /* Attention head index */
+    uint32_t layer_id;              /* Transformer layer */
+    uint64_t position;              /* Token position */
+    
+    /* Sparsity metadata */
+    float importance_score;         /* DSA importance (0.0 - 1.0) */
+    uint32_t sparsity_pattern;      /* Bitmask of active heads */
+    uint8_t compression_level;      /* 0=none, 1=FP16, 2=INT8, 3=custom */
+    
+    /* Location tracking */
+    gpuio_kv_location_t location;   /* HBM, CXL, or Remote */
+    uint64_t compressed_size;
+    uint64_t original_size;
+    
+    /* Cache management */
+    uint64_t last_access_time;
+    uint32_t access_count;
+    uint32_t eviction_priority;     /* Derived from importance_score */
+} gpuio_dsa_kv_entry_t;
+
+/* DSA KV Cache Pool */
+typedef struct {
+    /* HBM (Hot) Tier */
+    struct {
+        gpuio_dsa_kv_entry_t* entries;
+        void* data_buffer;
+        size_t capacity;
+        size_t used;
+        gpuio_lru_cache_t* index;
+    } hbm_tier;
+    
+    /* CXL (Warm) Tier */
+    struct {
+        gpuio_dsa_kv_entry_t* entries;
+        void* cxl_base_addr;
+        size_t capacity;
+        gpuio_cxl_handle_t cxl_handle;
+    } cxl_tier;
+    
+    /* Remote (Cold) Tier */
+    struct {
+        char* archive_uri;          /* rdma:// or nvme:// */
+        gpuio_handle_t remote_handle;
+        gpuio_compression_t* compressor;
+    } remote_tier;
+    
+    /* Management */
+    gpuio_dsa_router_t* router;     /* Learned routing for engram lookup */
+    pthread_mutex_t lock;
+    uint64_t total_hits;
+    uint64_t total_misses;
+} gpuio_dsa_kv_pool_t;
+
+/* DSA Router - Learned addressing */
+typedef struct {
+    /* Neural index for content-based routing */
+    void* neural_index;             /* GPU-resident index structure */
+    uint32_t num_shards;
+    
+    /* Routing table */
+    struct {
+        uint64_t shard_id;
+        gpuio_kv_location_t preferred_tier;
+        float latency_estimate;
+    }* routing_table;
+    
+    /* Prediction model */
+    void* lstm_predictor;           /* For access pattern prediction */
+} gpuio_dsa_router_t;
+
+/* DSA KV Operations */
+int gpuio_dsa_kv_init(gpuio_dsa_kv_pool_t* pool, gpuio_dsa_kv_config_t* config);
+int gpuio_dsa_kv_load(gpuio_dsa_kv_pool_t* pool, 
+                       uint64_t position, uint32_t head_id,
+                       gpuio_dsa_kv_entry_t** entry);
+int gpuio_dsa_kv_store(gpuio_dsa_kv_pool_t* pool,
+                        uint64_t position, uint32_t head_id,
+                        void* data, size_t size,
+                        float importance_score);
+int gpuio_dsa_kv_compact(gpuio_dsa_kv_pool_t* pool);  /* Compress and migrate */
+```
+
+### 10.2 Graph RAG Data Structures
+
+```c
+/* Graph Node for RAG */
+typedef struct {
+    uint64_t node_id;
+    uint64_t* edge_ids;             /* Adjacency list (compressed) */
+    uint32_t num_edges;
+    
+    /* Content */
+    float* embedding;               /* Vector representation */
+    uint32_t embedding_dim;
+    char* attributes;               /* JSON-style properties */
+    
+    /* GPU-cache metadata */
+    gpuio_cache_state_t cache_state;
+    uint64_t gpu_buffer_offset;
+} gpuio_graph_node_t;
+
+/* Graph RAG Request */
+typedef struct {
+    /* Query specification */
+    float* query_embedding;
+    uint32_t query_dim;
+    int top_k;                      /* Number of candidate nodes */
+    int hop_depth;                  /* Multi-hop expansion depth */
+    
+    /* Scatter phase */
+    gpuio_scatter_params_t scatter;
+    uint64_t* candidate_indices;    /* Output from vector search */
+    int num_candidates;
+    
+    /* Gather phase */
+    gpuio_gather_params_t gather;
+    gpuio_graph_node_t** subgraph;  /* Assembled subgraph */
+    int subgraph_size;
+    
+    /* Filters */
+    char** edge_type_filter;        /* Only follow these edge types */
+    int num_edge_types;
+    float min_similarity_threshold;
+} gpuio_graph_rag_request_t;
+
+/* Scatter-Gather optimized for graphs */
+int gpuio_graph_scatter(gpuio_context_t* ctx,
+                         gpuio_graph_rag_request_t* request,
+                         gpuio_graph_index_t* index);
+int gpuio_graph_gather(gpuio_context_t* ctx,
+                        gpuio_graph_rag_request_t* request,
+                        gpuio_graph_storage_t* storage);
+
+/* Graph Index (for vector similarity) */
+typedef struct {
+    /* ANN index structure */
+    void* hnsw_index;               /* Hierarchical NSW graph */
+    void* ivf_index;                /* Inverted file index (alternative) */
+    
+    /* Partitioning */
+    int num_partitions;
+    gpuio_graph_partition_t* partitions;
+    
+    /* GPU acceleration */
+    void* gpu_index;                /* CUDA-accelerated index */
+} gpuio_graph_index_t;
+```
+
+### 10.3 Engram Memory Data Structures
+
+```c
+/* Engram - Unit of external memory */
+typedef struct {
+    uint64_t engram_id;             /* Unique identifier (content hash) */
+    uint64_t version;               /* For cache invalidation */
+    
+    /* Content */
+    void* data;
+    size_t size;
+    float* embedding;               /* For semantic retrieval */
+    uint32_t embedding_dim;
+    
+    /* Metadata */
+    uint64_t creation_timestamp;
+    uint64_t last_access_timestamp;
+    uint32_t access_count;
+    float importance_score;         /* Learned importance */
+    
+    /* Storage location */
+    gpuio_engram_location_t location;
+    union {
+        struct { void* gpu_ptr; } hbm;
+        struct { uint64_t cxl_offset; } cxl;
+        struct { char* uri; uint64_t offset; } remote;
+    } loc;
+} gpuio_engram_t;
+
+/* Engram Pool - Petabyte-scale storage */
+typedef struct {
+    /* Tiered storage */
+    gpuio_engram_t** hbm_cache;     /* Hot engrams in GPU */
+    size_t hbm_capacity;
+    
+    gpuio_engram_t** cxl_pool;      /* Warm engrams in CXL */
+    size_t cxl_capacity;
+    
+    gpuio_handle_t remote_archive;  /* Cold engrams in distributed storage */
+    
+    /* Indexing */
+    gpuio_engram_index_t* index;    /* Content-addressable index */
+    
+    /* Write management */
+    gpuio_write_buffer_t* write_buffer;  /* Async write batching */
+    pthread_t flush_thread;
+} gpuio_engram_pool_t;
+
+/* Engram Index - Neural + Traditional */
+typedef struct {
+    /* Vector index for semantic search */
+    void* faiss_index;              /* GPU-accelerated FAISS */
+    
+    /* Hash index for exact lookup */
+    gpuio_hash_table_t* hash_index; /* content_hash -> engram_id */
+    
+    /* Learned routing */
+    void* neural_router;            /* Predicts engram location */
+} gpuio_engram_index_t;
+
+/* Engram Operations */
+int gpuio_engram_init(gpuio_engram_pool_t* pool, gpuio_engram_config_t* config);
+int gpuio_engram_read(gpuio_engram_pool_t* pool,
+                       float* query_embedding,
+                       uint64_t* engram_ids,  /* Optional: exact IDs */
+                       gpuio_engram_t** results,
+                       int top_k);
+int gpuio_engram_write(gpuio_engram_pool_t* pool,
+                        gpuio_engram_t* engram,
+                        gpuio_write_mode_t mode);  /* SYNC or ASYNC */
+int gpuio_engram_query(gpuio_engram_pool_t* pool,
+                        float* query_embedding,
+                        float similarity_threshold,
+                        gpuio_engram_t** results,
+                        int* num_results);
+```
+
+### 10.4 Compression Algorithms for AI Workloads
+
+```c
+/* KV Cache Compression */
+typedef enum {
+    GPUIO_KV_COMPRESS_NONE = 0,
+    GPUIO_KV_COMPRESS_FP16,       /* 2x compression */
+    GPUIO_KV_COMPRESS_INT8,       /* 4x compression with calibration */
+    GPUIO_KV_COMPRESS_4BIT,       /* 8x compression (GPTQ-style) */
+    GPUIO_KV_COMPRESS_SPARSE,     /* Sparse representation for DSA */
+} gpuio_kv_compression_t;
+
+/* Engram Compression */
+typedef enum {
+    GPUIO_ENGRAM_COMPRESS_NONE = 0,
+    GPUIO_ENGRAM_COMPRESS_ZSTD,   /* General compression */
+    GPUIO_ENGRAM_COMPRESS_LZ4,    /* Fast compression */
+    GPUIO_ENGRAM_COMPRESS_EMBED,  /* Embedding-specific quantization */
+} gpuio_engram_compression_t;
+
+/* GPU-Accelerated Compression */
+int gpuio_compress_kv(gpuio_dsa_kv_entry_t* kv_entry,
+                       void* input, size_t input_size,
+                       void* output, size_t* output_size,
+                       gpuio_kv_compression_t method);
+int gpuio_decompress_kv(gpuio_dsa_kv_entry_t* kv_entry,
+                         void* input, size_t input_size,
+                         void* output, size_t* output_size);
+
+/* Compression on transfer - zero-copy */
+int gpuio_transfer_compressed(gpuio_request_t* req,
+                                gpuio_compression_t* codec);
+```
+
+### 10.5 AI-Specific Scheduling Policies
+
+```c
+/* Priority classes for AI workloads */
+typedef enum {
+    GPUIO_PRIO_INFERENCE_REALTIME = 0,  /* User-facing inference */
+    GPUIO_PRIO_TRAINING_FW,             /* Training forward pass */
+    GPUIO_PRIO_TRAINING_BW,             /* Training backward pass */
+    GPUIO_PRIO_CHECKPOINT,              /* Model checkpointing */
+    GPUIO_PRIO_ENGRAM_SYNC,             /* Engram write-back */
+    GPUIO_PRIO_BACKGROUND,              /* Prefetch, cleanup */
+} gpuio_ai_priority_t;
+
+/* Deadline-aware scheduling for inference */
+typedef struct {
+    uint64_t deadline_us;           /* SLO deadline */
+    uint64_t estimated_duration_us; /* Predicted execution time */
+    float criticality;              /* Business impact (0.0 - 1.0) */
+} gpuio_inference_qos_t;
+
+/* Engram-aware scheduling */
+int gpuio_schedule_engram_prefetch(gpuio_scheduler_t* sched,
+                                    gpuio_dsa_router_t* router,
+                                    uint64_t* upcoming_tokens,
+                                    int num_tokens);
+
+/* KV cache eviction with importance scoring */
+int gpuio_evict_by_importance(gpuio_dsa_kv_pool_t* pool,
+                               size_t required_space,
+                               float importance_threshold);
+```
+
+### 10.6 Integration APIs
+
+```c
+/* Unified AI Workload API */
+typedef struct {
+    /* Model context */
+    gpuio_model_handle_t model;
+    int num_layers;
+    int num_heads;
+    int head_dim;
+    
+    /* Memory systems */
+    gpuio_dsa_kv_pool_t* kv_pool;
+    gpuio_engram_pool_t* engram_pool;
+    gpuio_graph_index_t* knowledge_graph;
+    
+    /* Scheduling */
+    gpuio_scheduler_t* scheduler;
+    gpuio_ai_priority_t default_priority;
+} gpuio_ai_context_t;
+
+/* End-to-end inference with all systems */
+int gpuio_ai_inference(gpuio_ai_context_t* ctx,
+                        gpuio_inference_request_t* request,
+                        gpuio_inference_response_t* response);
+
+/* Training step with checkpoint and engram update */
+int gpuio_ai_training_step(gpuio_ai_context_t* ctx,
+                            gpuio_training_batch_t* batch,
+                            gpuio_checkpoint_policy_t* checkpoint_policy);
+```
+
+---
+
+## 11. Document History
 
 | Version | Date | Author | Changes |
 |---------|------|--------|---------|
 | 1.0 | 2026-02-09 | gpuio Team | Initial design document |
+| 1.1 | 2026-02-09 | gpuio Team | Added DeepSeek-specific data structures and APIs (DSA, Engram, Graph RAG) |
