@@ -10,6 +10,7 @@
 #include <string.h>
 #include <stdarg.h>
 #include <time.h>
+#include <unistd.h>
 
 static const char* error_strings[] = {
     [0] = "Success",
