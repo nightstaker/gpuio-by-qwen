@@ -27,6 +27,10 @@ static double get_time_ms(void) {
     return get_time_us() / 1000.0;
 }
 
+/* Suppress unused function warning - available for future benchmarks */
+typedef double (*get_time_ms_func_t)(void);
+static const get_time_ms_func_t __attribute__((unused)) _unused_get_time_ms = get_time_ms;
+
 /* Statistics */
 typedef struct {
     double min;

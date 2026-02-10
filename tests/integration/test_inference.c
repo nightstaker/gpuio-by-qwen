@@ -181,9 +181,11 @@ static int test_graph_rag_inference(void) {
             .top_k = 100,
             .similarity_threshold = 0.7f,
         };
+        (void)scatter;
         
         uint64_t* candidates = NULL;
         int num_candidates = 0;
+        (void)num_candidates;
         
         /* In real code: gpuio_graph_rag_scatter(...); */
         
@@ -195,9 +197,12 @@ static int test_graph_rag_inference(void) {
                 .include_edges = true,
                 .include_neighbors = true,
             };
+            (void)gather;
             
             gpuio_graph_node_t* subgraph = NULL;
             int subgraph_size = 0;
+            (void)subgraph;
+            (void)subgraph_size;
             
             /* In real code: gpuio_graph_rag_gather(...); */
         }

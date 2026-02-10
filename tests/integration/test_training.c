@@ -152,6 +152,8 @@ static int test_distributed_training_with_checkpoint(void) {
             };
             
             gpuio_training_result_t result;
+            (void)params;
+            (void)result;
             /* Note: gpuio_ai_training_step would be called here in real code */
             
             double ckpt_end = get_time_ms();
