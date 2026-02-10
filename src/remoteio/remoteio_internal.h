@@ -7,7 +7,7 @@
 #ifndef REMOTEIO_INTERNAL_H
 #define REMOTEIO_INTERNAL_H
 
-#include "gpuio.h"
+#include <gpuio/gpuio.h>
 #include <pthread.h>
 #include <stdint.h>
 #include <stdbool.h>

@@ -9,7 +9,7 @@
 #include <string.h>
 #include <assert.h>
 #include <time.h>
-#include "gpuio.h"
+#include <gpuio/gpuio.h>
 
 /* Test statistics */
 static int tests_run = 0;

@@ -5,9 +5,9 @@ cmake_minimum_required(VERSION 3.16)
 
 # Common module sources
 set(COMMON_SOURCES
-    src/common_utils.c
-    src/lru_cache.c
-    src/vector_ops.c
+    common_utils.c
+    lru_cache.c
+    vector_ops.c
 )
 
 # Create static library for common utilities
@@ -16,7 +16,7 @@ add_library(common_utils STATIC ${COMMON_SOURCES})
 # Include directories
 target_include_directories(common_utils
     PUBLIC
-        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
         $<INSTALL_INTERFACE:include/gpuio>
     PRIVATE
         ${CMAKE_SOURCE_DIR}/include
@@ -48,13 +48,13 @@ target_compile_options(common_utils PRIVATE -fvisibility=hidden)
 
 # Export variables to parent scope
 set(COMMON_UTILS_LIBRARY common_utils PARENT_SCOPE)
-set(COMMON_UTILS_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/include PARENT_SCOPE)
+set(COMMON_UTILS_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR} PARENT_SCOPE)
 
 # Install headers
 install(FILES
-    include/common_utils.h
-    include/lru_cache.h
-    include/vector_ops.h
+    common_utils.h
+    lru_cache.h
+    vector_ops.h
     DESTINATION include/gpuio/common
 )
 

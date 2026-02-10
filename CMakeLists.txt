@@ -32,13 +32,13 @@ find_package(Threads REQUIRED)
 # ============================================================================
 # Common utilities module (must be first)
 # ============================================================================
-add_subdirectory(modules/common)
+add_subdirectory(src/common)
 
 # Include directories (global)
 include_directories(
     ${CMAKE_SOURCE_DIR}/include
     ${CMAKE_SOURCE_DIR}/include/gpuio
-    ${CMAKE_SOURCE_DIR}/modules/common/include
+    ${CMAKE_SOURCE_DIR}/src/common
 )
 
 # ============================================================================
@@ -46,16 +46,16 @@ include_directories(
 # ============================================================================
 set(CORE_SOURCES
     src/gpuio.c
-    modules/core/src/context.c
-    modules/core/src/memory.c
-    modules/core/src/stream.c
-    modules/core/src/log.c
-    modules/core/src/vendor_nvidia.c
-    modules/core/src/vendor_amd.c
+    src/core/context.c
+    src/core/memory.c
+    src/core/stream.c
+    src/core/log.c
+    src/core/vendor_nvidia.c
+    src/core/vendor_amd.c
 )
 
 # Core module include
-include_directories(modules/core/include)
+include_directories(src/core)
 
 # ============================================================================
 # AI Extensions module
@@ -64,7 +64,7 @@ if(BUILD_AI_MODULE)
     message(STATUS "Building AI Extensions module")
     
     # Add AI module subdirectory (which depends on common)
-    add_subdirectory(modules/ai)
+    add_subdirectory(src/ai)
     
     add_definitions(-DGPUIO_AI_MODULE_ENABLED)
 endif()
@@ -120,14 +120,16 @@ install(DIRECTORY include/gpuio
 )
 
 # Install common module headers
-install(DIRECTORY modules/common/include/
+install(DIRECTORY src/common/
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/gpuio/common
+    FILES_MATCHING PATTERN "*.h"
 )
 
 # Install AI module headers if enabled
 if(BUILD_AI_MODULE)
-    install(DIRECTORY modules/ai/include/
+    install(DIRECTORY src/ai/
         DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/gpuio/ai
+        FILES_MATCHING PATTERN "*.h"
     )
 endif()
 
@@ -164,7 +166,7 @@ endif()
 message(STATUS "")
 message(STATUS "gpuio Configuration:")
 message(STATUS "  Version: ${PROJECT_VERSION}")
-message(STATUS "  Build type: ${CMAKE_BUILD_TYPE}")
+message(STATUS "  Build type: ${CMAKE_C_BUILD_TYPE}")
 message(STATUS "  AI Extensions: ${BUILD_AI_MODULE}")
 message(STATUS "  Tests: ${BUILD_TESTS}")
 message(STATUS "  Coverage: ${ENABLE_COVERAGE}")

@@ -4,19 +4,19 @@ cmake_minimum_required(VERSION 3.16)
 
 # AI module sources
 set(AI_SOURCES
-    src/ai_context.c
-    src/dsa_kv.c
-    src/graph_rag.c
-    src/engram.c
-    src/compression.c
+    ai_context.c
+    dsa_kv.c
+    graph_rag.c
+    engram.c
+    compression.c
 )
 
 # AI module include directories
 set(AI_INCLUDE_DIRS
-    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_SOURCE_DIR}/include
     ${CMAKE_SOURCE_DIR}/include/gpuio
-    ${CMAKE_SOURCE_DIR}/modules/common/include
+    ${CMAKE_SOURCE_DIR}/src/common
 )
 
 # Create object library for AI module
@@ -51,10 +51,10 @@ set(AI_MODULE_INCLUDE_DIRS ${AI_INCLUDE_DIRS} PARENT_SCOPE)
 
 # Install headers
 install(FILES
-    include/ai_internal.h
-    include/dsa_kv_internal.h
-    include/engram_internal.h
-    include/graph_rag_internal.h
-    include/compression_internal.h
+    ai_internal.h
+    dsa_kv_internal.h
+    engram_internal.h
+    graph_rag_internal.h
+    compression_internal.h
     DESTINATION include/gpuio/ai
 )

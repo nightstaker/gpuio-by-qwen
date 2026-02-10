@@ -11,8 +11,8 @@
 #ifndef AI_INTERNAL_H
 #define AI_INTERNAL_H
 
-#include "gpuio.h"
-#include "gpuio_ai.h"
+#include <gpuio/gpuio.h>
+#include <gpuio/gpuio_ai.h>
 #include "common_utils.h"
 #include <pthread.h>
 #include <stdint.h>
