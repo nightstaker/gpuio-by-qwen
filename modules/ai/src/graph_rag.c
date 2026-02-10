@@ -1,11 +1,13 @@
 /**
  * @file graph_rag.c
  * @brief AI Extensions module - Graph RAG implementation
- * @version 1.0.0
+ * @version 1.1.0
  * 
  * Graph RAG (Retrieval-Augmented Generation) implementation for knowledge-
  * augmented LLMs. Supports vector similarity search, multi-hop graph traversal,
  * and scatter/gather operations optimized for GPU-accelerated inference.
+ * 
+ * Refactored to use common vector_ops for similarity calculations.
  */
 
 #include "ai_internal.h"
@@ -16,23 +18,6 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <errno.h>
-
-/**
- * @brief Compute cosine similarity between two vectors.
- */
-float ai_graph_similarity(const float* a, const float* b, uint32_t dim) {
-    float dot = 0.0f, norm_a = 0.0f, norm_b = 0.0f;
-    
-    for (uint32_t i = 0; i < dim; i++) {
-        dot += a[i] * b[i];
-        norm_a += a[i] * a[i];
-        norm_b += b[i] * b[i];
-    }
-    
-    if (norm_a == 0.0f || norm_b == 0.0f) return 0.0f;
-    
-    return dot / (sqrtf(norm_a) * sqrtf(norm_b));
-}
 
 /**
  * @brief Initialize graph index.
@@ -149,6 +134,7 @@ void ai_graph_storage_cleanup(struct ai_graph_storage* storage) {
 
 /**
  * @brief HNSW-style approximate nearest neighbor search.
+ * Uses vec_cosine_similarity_f32 from vector_ops.h via ai_graph_similarity inline.
  */
 gpuio_error_t ai_graph_hnsw_search(struct ai_graph_index* idx,
                                     const float* query, uint32_t dim,
@@ -179,6 +165,7 @@ gpuio_error_t ai_graph_hnsw_search(struct ai_graph_index* idx,
     for (uint64_t i = 0; i < idx->num_nodes; i++) {
         ai_graph_node_t* node = &idx->nodes[i];
         if (node->embedding) {
+            /* Use common vector_ops via ai_graph_similarity inline function */
             float sim = ai_graph_similarity(query, node->embedding, dim);
             if (sim >= threshold) {
                 scores[count].node_id = node->node_id;
@@ -190,16 +177,9 @@ gpuio_error_t ai_graph_hnsw_search(struct ai_graph_index* idx,
     
     pthread_mutex_unlock(&idx->nodes_lock);
     
-    /* Sort by similarity (descending) */
-    for (int i = 0; i < count - 1; i++) {
-        for (int j = i + 1; j < count; j++) {
-            if (scores[j].similarity > scores[i].similarity) {
-                score_t tmp = scores[i];
-                scores[i] = scores[j];
-                scores[j] = tmp;
-            }
-        }
-    }
+    /* Sort by similarity (descending) using common utility */
+    qsort(scores, (size_t)count, sizeof(score_t),
+          (int (*)(const void*, const void*))vec_result_compare_desc);
     
     /* Return top-k */
     int result_count = (count < top_k) ? count : top_k;

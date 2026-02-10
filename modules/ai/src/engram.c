@@ -1,10 +1,12 @@
 /**
  * @file engram.c
  * @brief AI Extensions module - Engram Memory implementation
- * @version 1.0.0
+ * @version 1.1.0
  * 
  * DeepSeek Engram Memory Architecture for petabyte-scale external memory
  * with learned addressing and GPU-initiated memory operations.
+ * 
+ * Refactored to use common utilities (LRU cache, hash functions, vector_ops).
  */
 
 #include "ai_internal.h"
@@ -13,34 +15,6 @@
 #include <string.h>
 #include <math.h>
 #include <unistd.h>
-
-/**
- * @brief Compute hash for engram lookup.
- */
-static uint64_t ai_engram_hash(uint64_t engram_id) {
-    /* SplitMix64 hash */
-    uint64_t z = engram_id + 0x9e3779b97f4a7c15;
-    z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9;
-    z = (z ^ (z >> 27)) * 0x94d049bb133111eb;
-    return (z ^ (z >> 31)) % AI_ENGRAM_HASH_BUCKETS;
-}
-
-/**
- * @brief Compute cosine similarity between vectors.
- */
-float ai_engram_similarity(const float* a, const float* b, uint32_t dim) {
-    float dot = 0.0f, norm_a = 0.0f, norm_b = 0.0f;
-    
-    for (uint32_t i = 0; i < dim; i++) {
-        dot += a[i] * b[i];
-        norm_a += a[i] * a[i];
-        norm_b += b[i] * b[i];
-    }
-    
-    if (norm_a == 0.0f || norm_b == 0.0f) return 0.0f;
-    
-    return dot / (sqrtf(norm_a) * sqrtf(norm_b));
-}
 
 /**
  * @brief Background write thread for async engram writes.
@@ -130,15 +104,21 @@ int ai_engram_init(struct ai_engram* engram, gpuio_ai_context_t ai_ctx,
     
     /* Initialize locks */
     pthread_mutex_init(&engram->hash_lock, NULL);
-    pthread_mutex_init(&engram->lru_lock, NULL);
     pthread_mutex_init(&engram->index_lock, NULL);
     pthread_mutex_init(&engram->stats_lock, NULL);
     pthread_mutex_init(&engram->write_buffer_lock, NULL);
     pthread_mutex_init(&engram->lock, NULL);
     
-    /* Initialize LRU */
-    engram->lru_head = NULL;
-    engram->lru_tail = NULL;
+    /* Initialize LRU cache (using common utilities) */
+    engram->lru_cache = lru_cache_create();
+    if (!engram->lru_cache) {
+        free(engram->write_buffer);
+        free(engram->vector_index);
+        free(engram->hash_table);
+        free(engram->hbm_tier.storage);
+        free(engram->cxl_tier.storage);
+        return -1;
+    }
     
     /* Initialize statistics */
     memset(&engram->stats, 0, sizeof(gpuio_engram_stats_t));
@@ -175,20 +155,14 @@ void ai_engram_cleanup(struct ai_engram* engram) {
     
     pthread_mutex_lock(&engram->lock);
     
-    /* Free all entries */
-    for (int i = 0; i < AI_ENGRAM_HASH_BUCKETS; i++) {
-        ai_engram_entry_t* entry = engram->hash_table[i];
-        while (entry) {
-            ai_engram_entry_t* next = entry->hash_next;
-            if (entry->data) free(entry->data);
-            if (entry->embedding) free(entry->embedding);
-            pthread_mutex_destroy(&entry->lock);
-            free(entry);
-            entry = next;
-        }
-    }
+    /* Free all entries via LRU cache destroy */
+    lru_cache_destroy(engram->lru_cache, NULL, NULL);
+    engram->lru_cache = NULL;
     
+    /* Free hash table (entries already freed) */
     free(engram->hash_table);
+    engram->hash_table = NULL;
+    
     free(engram->vector_index);
     free(engram->hbm_tier.storage);
     free(engram->cxl_tier.storage);
@@ -197,7 +171,6 @@ void ai_engram_cleanup(struct ai_engram* engram) {
     pthread_mutex_unlock(&engram->lock);
     
     pthread_mutex_destroy(&engram->hash_lock);
-    pthread_mutex_destroy(&engram->lru_lock);
     pthread_mutex_destroy(&engram->index_lock);
     pthread_mutex_destroy(&engram->stats_lock);
     pthread_mutex_destroy(&engram->write_buffer_lock);
@@ -227,8 +200,8 @@ ai_engram_entry_t* ai_engram_lookup(struct ai_engram* engram, uint64_t engram_id
             pthread_mutex_unlock(&entry->lock);
             pthread_mutex_unlock(&engram->hash_lock);
             
-            /* Move to front of LRU */
-            ai_engram_lru_touch(engram, entry);
+            /* Touch in LRU cache */
+            lru_cache_touch(engram->lru_cache, (lru_entry_t*)entry);
             
             pthread_mutex_lock(&engram->stats_lock);
             engram->stats.cache_hits++;
@@ -244,66 +217,8 @@ ai_engram_entry_t* ai_engram_lookup(struct ai_engram* engram, uint64_t engram_id
 }
 
 /**
- * @brief Add entry to LRU list.
- */
-void ai_engram_lru_add(struct ai_engram* engram, ai_engram_entry_t* entry) {
-    if (!engram || !entry) return;
-    
-    pthread_mutex_lock(&engram->lru_lock);
-    
-    entry->lru_prev = NULL;
-    entry->lru_next = engram->lru_head;
-    
-    if (engram->lru_head) {
-        engram->lru_head->lru_prev = entry;
-    }
-    engram->lru_head = entry;
-    
-    if (!engram->lru_tail) {
-        engram->lru_tail = entry;
-    }
-    
-    pthread_mutex_unlock(&engram->lru_lock);
-}
-
-/**
- * @brief Remove entry from LRU list.
- */
-void ai_engram_lru_remove(struct ai_engram* engram, ai_engram_entry_t* entry) {
-    if (!engram || !entry) return;
-    
-    pthread_mutex_lock(&engram->lru_lock);
-    
-    if (entry->lru_prev) {
-        entry->lru_prev->lru_next = entry->lru_next;
-    } else {
-        engram->lru_head = entry->lru_next;
-    }
-    
-    if (entry->lru_next) {
-        entry->lru_next->lru_prev = entry->lru_prev;
-    } else {
-        engram->lru_tail = entry->lru_prev;
-    }
-    
-    entry->lru_prev = NULL;
-    entry->lru_next = NULL;
-    
-    pthread_mutex_unlock(&engram->lru_lock);
-}
-
-/**
- * @brief Touch entry (move to front of LRU).
- */
-void ai_engram_lru_touch(struct ai_engram* engram, ai_engram_entry_t* entry) {
-    if (!engram || !entry) return;
-    
-    ai_engram_lru_remove(engram, entry);
-    ai_engram_lru_add(engram, entry);
-}
-
-/**
  * @brief Vector similarity search for engrams.
+ * Uses vec_cosine_similarity_f32 from vector_ops.h
  */
 gpuio_error_t ai_engram_vector_search(struct ai_engram* engram,
                                        const float* query, uint32_t dim,
@@ -313,7 +228,7 @@ gpuio_error_t ai_engram_vector_search(struct ai_engram* engram,
         return GPUIO_ERROR_INVALID_ARG;
     }
     
-    uint64_t start_time = ai_get_time_us();
+    uint64_t start_time = gpuio_get_time_us();
     
     typedef struct {
         ai_engram_entry_t* entry;
@@ -331,7 +246,8 @@ gpuio_error_t ai_engram_vector_search(struct ai_engram* engram,
         ai_engram_entry_t* entry = engram->hash_table[i];
         while (entry) {
             if (entry->embedding && entry->embedding_dim == dim) {
-                float sim = ai_engram_similarity(query, entry->embedding, dim);
+                /* Use common vector_ops for similarity */
+                float sim = vec_cosine_similarity_f32(query, entry->embedding, dim);
                 if (sim >= threshold) {
                     scores[count].entry = entry;
                     scores[count].similarity = sim;
@@ -343,16 +259,9 @@ gpuio_error_t ai_engram_vector_search(struct ai_engram* engram,
     }
     pthread_mutex_unlock(&engram->hash_lock);
     
-    /* Sort by similarity (descending) */
-    for (int i = 0; i < count - 1; i++) {
-        for (int j = i + 1; j < count; j++) {
-            if (scores[j].similarity > scores[i].similarity) {
-                score_t tmp = scores[i];
-                scores[i] = scores[j];
-                scores[j] = tmp;
-            }
-        }
-    }
+    /* Sort by similarity (descending) using common utility */
+    qsort(scores, (size_t)count, sizeof(score_t), 
+          (int (*)(const void*, const void*))vec_result_compare_desc);
     
     /* Return top-k */
     int result_count = (count < top_k) ? count : top_k;
@@ -367,7 +276,7 @@ gpuio_error_t ai_engram_vector_search(struct ai_engram* engram,
     free(scores);
     
     /* Update statistics */
-    uint64_t latency = ai_get_time_us() - start_time;
+    uint64_t latency = gpuio_get_time_us() - start_time;
     pthread_mutex_lock(&engram->stats_lock);
     engram->stats.total_queries++;
     /* Update average latency */
@@ -448,6 +357,10 @@ gpuio_error_t gpuio_engram_write(gpuio_engram_pool_t pool,
     ai_engram_entry_t* entry = calloc(1, sizeof(ai_engram_entry_t));
     if (!entry) return GPUIO_ERROR_NOMEM;
     
+    /* Initialize LRU entry fields */
+    lru_entry_init((lru_entry_t*)entry);
+    lru_entry_lock_init((lru_entry_t*)entry);
+    
     entry->engram_id = engram_data->engram_id;
     entry->version = engram_data->version;
     entry->size = engram_data->size;
@@ -455,7 +368,6 @@ gpuio_error_t gpuio_engram_write(gpuio_engram_pool_t pool,
     entry->creation_timestamp = engram_data->creation_timestamp;
     entry->importance_score = engram_data->importance_score;
     entry->tier = engram_data->tier;
-    pthread_mutex_init(&entry->lock, NULL);
     
     /* Allocate and copy data */
     if (engram_data->size > 0 && engram_data->data) {
@@ -518,8 +430,8 @@ gpuio_error_t gpuio_engram_write(gpuio_engram_pool_t pool,
     engram->hash_table[hash] = entry;
     pthread_mutex_unlock(&engram->hash_lock);
     
-    /* Add to LRU */
-    ai_engram_lru_add(engram, entry);
+    /* Add to LRU cache */
+    lru_cache_add(engram->lru_cache, (lru_entry_t*)entry);
     
     pthread_mutex_lock(&engram->stats_lock);
     engram->entry_count++;
@@ -786,7 +698,7 @@ gpuio_error_t ai_engram_load_entry(struct ai_engram* engram, ai_engram_entry_t* 
     /* Data already in memory, just return */
     if (entry->data) {
         pthread_mutex_unlock(&entry->lock);
-        ai_engram_lru_touch(engram, entry);
+        lru_cache_touch(engram->lru_cache, (lru_entry_t*)entry);
         return GPUIO_SUCCESS;
     }
     
@@ -833,7 +745,7 @@ gpuio_error_t ai_engram_load_entry(struct ai_engram* engram, ai_engram_entry_t* 
     }
     
     pthread_mutex_unlock(&entry->lock);
-    ai_engram_lru_touch(engram, entry);
+    lru_cache_touch(engram->lru_cache, (lru_entry_t*)entry);
     
     return GPUIO_SUCCESS;
 }

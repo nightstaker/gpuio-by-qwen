@@ -1,11 +1,13 @@
 /**
  * @file dsa_kv.c
  * @brief AI Extensions module - DSA KV Cache implementation
- * @version 1.0.0
+ * @version 1.1.0
  * 
  * DeepSeek Dynamic Sparse Attention (DSA) KV Cache implementation with
  * tiered storage (HBM/CXL/Remote), compression support, and sparsity
  * pattern management.
+ * 
+ * Refactored to use common utilities (LRU cache, hash functions).
  */
 
 #include "ai_internal.h"
@@ -13,21 +15,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
-
-/**
- * @brief Compute hash for KV entry lookup.
- */
-uint64_t ai_dsa_kv_hash(uint64_t position, uint32_t layer_id, uint32_t head_id) {
-    /* FNV-1a hash variant */
-    uint64_t hash = 14695981039346656037ULL;
-    hash ^= position;
-    hash *= 1099511628211ULL;
-    hash ^= layer_id;
-    hash *= 1099511628211ULL;
-    hash ^= head_id;
-    hash *= 1099511628211ULL;
-    return hash % AI_DSA_KV_HASH_BUCKETS;
-}
 
 /**
  * @brief Initialize DSA KV subsystem.
@@ -64,7 +51,6 @@ int ai_dsa_kv_init(struct ai_dsa_kv* kv, gpuio_ai_context_t ai_ctx,
     
     /* Initialize locks */
     pthread_mutex_init(&kv->hash_lock, NULL);
-    pthread_mutex_init(&kv->lru_lock, NULL);
     pthread_mutex_init(&kv->sparsity_lock, NULL);
     pthread_mutex_init(&kv->stats_lock, NULL);
     pthread_mutex_init(&kv->lock, NULL);
@@ -74,9 +60,12 @@ int ai_dsa_kv_init(struct ai_dsa_kv* kv, gpuio_ai_context_t ai_ctx,
         kv->sparsity_patterns[i] = 0xFFFFFFFF;
     }
     
-    /* Initialize LRU list */
-    kv->lru_head = NULL;
-    kv->lru_tail = NULL;
+    /* Initialize LRU cache (using common utilities) */
+    kv->lru_cache = lru_cache_create();
+    if (!kv->lru_cache) {
+        free(kv->hash_table);
+        return -1;
+    }
     
     /* Initialize statistics */
     memset(&kv->stats, 0, sizeof(gpuio_dsa_kv_stats_t));
@@ -97,21 +86,13 @@ void ai_dsa_kv_cleanup(struct ai_dsa_kv* kv) {
     
     pthread_mutex_lock(&kv->lock);
     
-    /* Free all entries */
-    for (int i = 0; i < AI_DSA_KV_HASH_BUCKETS; i++) {
-        ai_kv_entry_t* entry = kv->hash_table[i];
-        while (entry) {
-            ai_kv_entry_t* next = entry->hash_next;
-            if (entry->data) {
-                free(entry->data);
-            }
-            pthread_mutex_destroy(&entry->lock);
-            free(entry);
-            entry = next;
-        }
-    }
+    /* Free all entries via LRU cache destroy */
+    lru_cache_destroy(kv->lru_cache, NULL, NULL);
+    kv->lru_cache = NULL;
     
+    /* Free hash table (entries already freed by LRU destroy) */
     free(kv->hash_table);
+    kv->hash_table = NULL;
     
     if (kv->cxl_tier.cxl_device_path) {
         free(kv->cxl_tier.cxl_device_path);
@@ -123,7 +104,6 @@ void ai_dsa_kv_cleanup(struct ai_dsa_kv* kv) {
     pthread_mutex_unlock(&kv->lock);
     
     pthread_mutex_destroy(&kv->hash_lock);
-    pthread_mutex_destroy(&kv->lru_lock);
     pthread_mutex_destroy(&kv->sparsity_lock);
     pthread_mutex_destroy(&kv->stats_lock);
     pthread_mutex_destroy(&kv->lock);
@@ -149,12 +129,11 @@ ai_kv_entry_t* ai_dsa_kv_lookup(struct ai_dsa_kv* kv, uint64_t position,
             pthread_mutex_lock(&entry->lock);
             entry->ref_count++;
             entry->access_count++;
-            entry->last_access_time = ai_get_time_us();
             pthread_mutex_unlock(&entry->lock);
             pthread_mutex_unlock(&kv->hash_lock);
             
-            /* Move to front of LRU */
-            ai_dsa_kv_lru_touch(kv, entry);
+            /* Touch in LRU cache */
+            lru_cache_touch(kv->lru_cache, (lru_entry_t*)entry);
             
             return entry;
         }
@@ -163,65 +142,6 @@ ai_kv_entry_t* ai_dsa_kv_lookup(struct ai_dsa_kv* kv, uint64_t position,
     pthread_mutex_unlock(&kv->hash_lock);
     
     return NULL;
-}
-
-/**
- * @brief Add entry to LRU list (at head).
- */
-void ai_dsa_kv_lru_add(struct ai_dsa_kv* kv, ai_kv_entry_t* entry) {
-    if (!kv || !entry) return;
-    
-    pthread_mutex_lock(&kv->lru_lock);
-    
-    entry->lru_prev = NULL;
-    entry->lru_next = kv->lru_head;
-    
-    if (kv->lru_head) {
-        kv->lru_head->lru_prev = entry;
-    }
-    kv->lru_head = entry;
-    
-    if (!kv->lru_tail) {
-        kv->lru_tail = entry;
-    }
-    
-    pthread_mutex_unlock(&kv->lru_lock);
-}
-
-/**
- * @brief Remove entry from LRU list.
- */
-void ai_dsa_kv_lru_remove(struct ai_dsa_kv* kv, ai_kv_entry_t* entry) {
-    if (!kv || !entry) return;
-    
-    pthread_mutex_lock(&kv->lru_lock);
-    
-    if (entry->lru_prev) {
-        entry->lru_prev->lru_next = entry->lru_next;
-    } else {
-        kv->lru_head = entry->lru_next;
-    }
-    
-    if (entry->lru_next) {
-        entry->lru_next->lru_prev = entry->lru_prev;
-    } else {
-        kv->lru_tail = entry->lru_prev;
-    }
-    
-    entry->lru_prev = NULL;
-    entry->lru_next = NULL;
-    
-    pthread_mutex_unlock(&kv->lru_lock);
-}
-
-/**
- * @brief Touch entry (move to front of LRU).
- */
-void ai_dsa_kv_lru_touch(struct ai_dsa_kv* kv, ai_kv_entry_t* entry) {
-    if (!kv || !entry) return;
-    
-    ai_dsa_kv_lru_remove(kv, entry);
-    ai_dsa_kv_lru_add(kv, entry);
 }
 
 /**
@@ -278,24 +198,12 @@ gpuio_error_t gpuio_dsa_kv_pool_reset(gpuio_dsa_kv_pool_t pool) {
     
     pthread_mutex_lock(&kv->lock);
     
-    /* Free all entries */
-    for (int i = 0; i < AI_DSA_KV_HASH_BUCKETS; i++) {
-        ai_kv_entry_t* entry = kv->hash_table[i];
-        while (entry) {
-            ai_kv_entry_t* next = entry->hash_next;
-            if (entry->data) {
-                free(entry->data);
-            }
-            pthread_mutex_destroy(&entry->lock);
-            free(entry);
-            entry = next;
-        }
-        kv->hash_table[i] = NULL;
-    }
+    /* Free all entries via LRU cache destroy and recreate */
+    lru_cache_destroy(kv->lru_cache, NULL, NULL);
+    kv->lru_cache = lru_cache_create();
     
-    /* Reset LRU */
-    kv->lru_head = NULL;
-    kv->lru_tail = NULL;
+    /* Reset hash table */
+    memset(kv->hash_table, 0, AI_DSA_KV_HASH_BUCKETS * sizeof(ai_kv_entry_t*));
     
     /* Reset stats */
     kv->hbm_tier.used = 0;
@@ -345,14 +253,16 @@ gpuio_error_t gpuio_dsa_kv_store(gpuio_dsa_kv_pool_t pool,
     ai_kv_entry_t* entry = calloc(1, sizeof(ai_kv_entry_t));
     if (!entry) return GPUIO_ERROR_NOMEM;
     
+    /* Initialize LRU entry fields */
+    lru_entry_init((lru_entry_t*)entry);
+    lru_entry_lock_init((lru_entry_t*)entry);
+    
     entry->position = position;
     entry->layer_id = layer_id;
     entry->head_id = head_id;
     entry->importance_score = importance_score;
     entry->original_size = size;
-    entry->last_access_time = ai_get_time_us();
     entry->access_count = 1;
-    pthread_mutex_init(&entry->lock, NULL);
     
     /* Determine tier based on importance */
     if (importance_score > 0.7f && kv->hbm_tier.used + size <= kv->hbm_tier.capacity) {
@@ -402,8 +312,8 @@ gpuio_error_t gpuio_dsa_kv_store(gpuio_dsa_kv_pool_t pool,
     kv->hash_table[hash] = entry;
     pthread_mutex_unlock(&kv->hash_lock);
     
-    /* Add to LRU */
-    ai_dsa_kv_lru_add(kv, entry);
+    /* Add to LRU cache */
+    lru_cache_add(kv->lru_cache, (lru_entry_t*)entry);
     
     pthread_mutex_lock(&kv->stats_lock);
     kv->entry_count++;
@@ -627,16 +537,18 @@ gpuio_error_t ai_dsa_kv_evict_entries(struct ai_dsa_kv* kv, size_t needed_space,
     
     size_t evicted = 0;
     
-    pthread_mutex_lock(&kv->lru_lock);
-    ai_kv_entry_t* entry = kv->lru_tail;
+    /* Use LRU cache eviction */
+    lru_cache_lock(kv->lru_cache);
+    lru_entry_t* lru_entry = lru_cache_get_lru(kv->lru_cache);
     
-    while (entry && evicted < needed_space) {
-        ai_kv_entry_t* prev = entry->lru_prev;
+    while (lru_entry && evicted < needed_space) {
+        ai_kv_entry_t* entry = (ai_kv_entry_t*)lru_entry;
+        lru_entry_t* prev = lru_entry_prev(lru_entry);
         
-        pthread_mutex_lock(&entry->lock);
+        lru_entry_lock(lru_entry);
         if (entry->tier == tier && entry->ref_count == 0) {
             size_t entry_size = entry->size;
-            pthread_mutex_unlock(&entry->lock);
+            lru_entry_unlock(lru_entry);
             
             /* Remove from hash table */
             uint64_t hash = ai_dsa_kv_hash(entry->position, entry->layer_id,
@@ -652,8 +564,8 @@ gpuio_error_t ai_dsa_kv_evict_entries(struct ai_dsa_kv* kv, size_t needed_space,
             }
             pthread_mutex_unlock(&kv->hash_lock);
             
-            /* Remove from LRU */
-            ai_dsa_kv_lru_remove(kv, entry);
+            /* Remove from LRU cache */
+            lru_cache_remove(kv->lru_cache, lru_entry);
             
             /* Free resources */
             if (entry->data) free(entry->data);
@@ -674,13 +586,13 @@ gpuio_error_t ai_dsa_kv_evict_entries(struct ai_dsa_kv* kv, size_t needed_space,
                 pthread_mutex_unlock(&kv->cxl_tier.lock);
             }
         } else {
-            pthread_mutex_unlock(&entry->lock);
+            lru_entry_unlock(lru_entry);
         }
         
-        entry = prev;
+        lru_entry = prev;
     }
     
-    pthread_mutex_unlock(&kv->lru_lock);
+    lru_cache_unlock(kv->lru_cache);
     
     return evicted >= needed_space ? GPUIO_SUCCESS : GPUIO_ERROR_NOMEM;
 }
@@ -698,16 +610,19 @@ gpuio_error_t gpuio_dsa_kv_compact(gpuio_dsa_kv_pool_t pool,
     
     pthread_mutex_lock(&kv->lock);
     
-    /* Traverse LRU and evict entries below importance threshold */
-    ai_kv_entry_t* entry = kv->lru_tail;
-    while (entry) {
-        ai_kv_entry_t* prev = entry->lru_prev;
+    /* Use LRU cache iteration for eviction */
+    lru_cache_lock(kv->lru_cache);
+    lru_entry_t* lru_entry = lru_cache_get_lru(kv->lru_cache);
+    
+    while (lru_entry) {
+        ai_kv_entry_t* entry = (ai_kv_entry_t*)lru_entry;
+        lru_entry_t* prev = lru_entry_prev(lru_entry);
         
-        pthread_mutex_lock(&entry->lock);
+        lru_entry_lock(lru_entry);
         if (entry->ref_count == 0 && 
             entry->importance_score < kv->config.compression_threshold) {
             /* Evict this entry */
-            pthread_mutex_unlock(&entry->lock);
+            lru_entry_unlock(lru_entry);
             
             /* Remove from hash table */
             uint64_t hash = ai_dsa_kv_hash(entry->position, entry->layer_id, 
@@ -723,8 +638,8 @@ gpuio_error_t gpuio_dsa_kv_compact(gpuio_dsa_kv_pool_t pool,
             }
             pthread_mutex_unlock(&kv->hash_lock);
             
-            /* Remove from LRU */
-            ai_dsa_kv_lru_remove(kv, entry);
+            /* Remove from LRU cache */
+            lru_cache_remove(kv->lru_cache, lru_entry);
             
             /* Free data */
             if (entry->data) free(entry->data);
@@ -733,11 +648,13 @@ gpuio_error_t gpuio_dsa_kv_compact(gpuio_dsa_kv_pool_t pool,
             
             kv->entry_count--;
         } else {
-            pthread_mutex_unlock(&entry->lock);
+            lru_entry_unlock(lru_entry);
         }
         
-        entry = prev;
+        lru_entry = prev;
     }
+    
+    lru_cache_unlock(kv->lru_cache);
     
     pthread_mutex_unlock(&kv->lock);
     

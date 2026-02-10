@@ -1,4 +1,5 @@
 # CMakeLists.txt for gpuio - GPU-Initiated IO Accelerator
+# Refactored to use modular build system with common utilities
 
 cmake_minimum_required(VERSION 3.16)
 project(gpuio VERSION 1.0.0 LANGUAGES C)
@@ -28,10 +29,16 @@ endif()
 # Find packages
 find_package(Threads REQUIRED)
 
-# Include directories
+# ============================================================================
+# Common utilities module (must be first)
+# ============================================================================
+add_subdirectory(modules/common)
+
+# Include directories (global)
 include_directories(
     ${CMAKE_SOURCE_DIR}/include
     ${CMAKE_SOURCE_DIR}/include/gpuio
+    ${CMAKE_SOURCE_DIR}/modules/common/include
 )
 
 # ============================================================================
@@ -56,18 +63,8 @@ include_directories(modules/core/include)
 if(BUILD_AI_MODULE)
     message(STATUS "Building AI Extensions module")
     
+    # Add AI module subdirectory (which depends on common)
     add_subdirectory(modules/ai)
-    
-    include_directories(modules/ai/include)
-    
-    # Add AI sources to core library
-    list(APPEND CORE_SOURCES 
-        modules/ai/src/ai_context.c
-        modules/ai/src/dsa_kv.c
-        modules/ai/src/graph_rag.c
-        modules/ai/src/engram.c
-        modules/ai/src/compression.c
-    )
     
     add_definitions(-DGPUIO_AI_MODULE_ENABLED)
 endif()
@@ -75,10 +72,16 @@ endif()
 # ============================================================================
 # Main library
 # ============================================================================
-add_library(gpuio ${CORE_SOURCES})
+if(BUILD_AI_MODULE)
+    # Include AI module object library sources
+    add_library(gpuio ${CORE_SOURCES} $<TARGET_OBJECTS:ai_module>)
+else()
+    add_library(gpuio ${CORE_SOURCES})
+endif()
 
 target_link_libraries(gpuio PUBLIC
     Threads::Threads
+    common_utils
     m  # math library
 )
 
@@ -115,6 +118,18 @@ install(EXPORT gpuioTargets
 install(DIRECTORY include/gpuio
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
 )
+
+# Install common module headers
+install(DIRECTORY modules/common/include/
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/gpuio/common
+)
+
+# Install AI module headers if enabled
+if(BUILD_AI_MODULE)
+    install(DIRECTORY modules/ai/include/
+        DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/gpuio/ai
+    )
+endif()
 
 # Install config file
 include(CMakePackageConfigHelpers)
