@@ -32,8 +32,9 @@ static const char* error_strings[] = {
 
 const char* gpuio_error_string(gpuio_error_t error) {
     if (error > 0) error = -error;
-    if (error >= 0 && error < sizeof(error_strings) / sizeof(error_strings[0])) {
-        return error_strings[error];
+    size_t idx = (size_t)error;
+    if (idx < sizeof(error_strings) / sizeof(error_strings[0])) {
+        return error_strings[idx];
     }
     return "Unknown error";
 }

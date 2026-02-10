@@ -96,8 +96,8 @@ gpuio_error_t gpuio_free(gpuio_context_t ctx, void* ptr) {
         }
     }
     
-    free(ptr);
     CORE_LOG(ctx, GPUIO_LOG_DEBUG, "Freed memory at %p", ptr);
+    free(ptr);
     return GPUIO_SUCCESS;
 }
 
