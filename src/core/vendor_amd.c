@@ -5,6 +5,7 @@
 
 #include "core_internal.h"
 #include <string.h>
+#include <stdlib.h>
 
 int amd_device_init(gpuio_context_t ctx, int device_id) {
     (void)ctx; (void)device_id;
