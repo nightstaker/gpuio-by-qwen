@@ -79,11 +79,13 @@ TEST(context_init_null_context) {
 
 TEST(context_double_init) {
     gpuio_context_t ctx;
-    gpuio_init(&ctx, NULL);
+    gpuio_error_t err = gpuio_init(&ctx, NULL);
+    ASSERT_EQ(err, GPUIO_SUCCESS);
+    ASSERT_NOT_NULL(ctx);
     
-    /* Should fail to reinitialize */
+    /* Verify context is valid */
     gpuio_config_t config;
-    gpuio_error_t err = gpuio_get_config(ctx, &config);
+    err = gpuio_get_config(ctx, &config);
     ASSERT_EQ(err, GPUIO_SUCCESS);
     
     gpuio_finalize(ctx);
