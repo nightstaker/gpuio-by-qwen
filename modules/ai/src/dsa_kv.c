@@ -553,6 +553,139 @@ gpuio_error_t gpuio_dsa_kv_set_sparsity_pattern(gpuio_dsa_kv_pool_t pool,
 }
 
 /**
+ * @brief Promote an entry to a higher tier.
+ *
+ * Moves a KV entry from its current tier to a faster tier (e.g., CXL -> HBM).
+ */
+gpuio_error_t ai_dsa_kv_promote_entry(struct ai_dsa_kv* kv, ai_kv_entry_t* entry,
+                                       gpuio_kv_tier_t target_tier) {
+    if (!kv || !entry) return GPUIO_ERROR_INVALID_ARG;
+    
+    if (target_tier <= entry->tier) {
+        return GPUIO_SUCCESS;  /* Already at or above target tier */
+    }
+    
+    pthread_mutex_lock(&entry->lock);
+    
+    size_t size = entry->size;
+    void* new_data = NULL;
+    
+    /* Check if we can allocate in target tier */
+    if (target_tier == GPUIO_KV_TIER_HBM) {
+        pthread_mutex_lock(&kv->hbm_tier.lock);
+        if (kv->hbm_tier.used + size <= kv->hbm_tier.capacity) {
+            new_data = malloc(size);
+            if (new_data) {
+                memcpy(new_data, entry->data, size);
+                kv->hbm_tier.used += size;
+            }
+        }
+        pthread_mutex_unlock(&kv->hbm_tier.lock);
+    } else if (target_tier == GPUIO_KV_TIER_CXL) {
+        pthread_mutex_lock(&kv->cxl_tier.lock);
+        if (kv->cxl_tier.used + size <= kv->cxl_tier.capacity) {
+            new_data = malloc(size);
+            if (new_data) {
+                memcpy(new_data, entry->data, size);
+                kv->cxl_tier.used += size;
+            }
+        }
+        pthread_mutex_unlock(&kv->cxl_tier.lock);
+    }
+    
+    if (new_data) {
+        /* Free old data and update */
+        if (entry->tier == GPUIO_KV_TIER_HBM) {
+            pthread_mutex_lock(&kv->hbm_tier.lock);
+            kv->hbm_tier.used -= size;
+            pthread_mutex_unlock(&kv->hbm_tier.lock);
+        } else if (entry->tier == GPUIO_KV_TIER_CXL) {
+            pthread_mutex_lock(&kv->cxl_tier.lock);
+            kv->cxl_tier.used -= size;
+            pthread_mutex_unlock(&kv->cxl_tier.lock);
+        }
+        
+        free(entry->data);
+        entry->data = new_data;
+        entry->tier = target_tier;
+    }
+    
+    pthread_mutex_unlock(&entry->lock);
+    
+    return new_data ? GPUIO_SUCCESS : GPUIO_ERROR_NOMEM;
+}
+
+/**
+ * @brief Evict entries to make room in a tier.
+ *
+ * Removes least recently used entries from the specified tier until
+ * the requested amount of space is available.
+ */
+gpuio_error_t ai_dsa_kv_evict_entries(struct ai_dsa_kv* kv, size_t needed_space,
+                                       gpuio_kv_tier_t tier) {
+    if (!kv) return GPUIO_ERROR_INVALID_ARG;
+    
+    size_t evicted = 0;
+    
+    pthread_mutex_lock(&kv->lru_lock);
+    ai_kv_entry_t* entry = kv->lru_tail;
+    
+    while (entry && evicted < needed_space) {
+        ai_kv_entry_t* prev = entry->lru_prev;
+        
+        pthread_mutex_lock(&entry->lock);
+        if (entry->tier == tier && entry->ref_count == 0) {
+            size_t entry_size = entry->size;
+            pthread_mutex_unlock(&entry->lock);
+            
+            /* Remove from hash table */
+            uint64_t hash = ai_dsa_kv_hash(entry->position, entry->layer_id,
+                                           entry->head_id);
+            pthread_mutex_lock(&kv->hash_lock);
+            ai_kv_entry_t** current = &kv->hash_table[hash];
+            while (*current) {
+                if (*current == entry) {
+                    *current = entry->hash_next;
+                    break;
+                }
+                current = &(*current)->hash_next;
+            }
+            pthread_mutex_unlock(&kv->hash_lock);
+            
+            /* Remove from LRU */
+            ai_dsa_kv_lru_remove(kv, entry);
+            
+            /* Free resources */
+            if (entry->data) free(entry->data);
+            pthread_mutex_destroy(&entry->lock);
+            free(entry);
+            
+            kv->entry_count--;
+            evicted += entry_size;
+            
+            /* Update tier usage */
+            if (tier == GPUIO_KV_TIER_HBM) {
+                pthread_mutex_lock(&kv->hbm_tier.lock);
+                kv->hbm_tier.used -= entry_size;
+                pthread_mutex_unlock(&kv->hbm_tier.lock);
+            } else if (tier == GPUIO_KV_TIER_CXL) {
+                pthread_mutex_lock(&kv->cxl_tier.lock);
+                kv->cxl_tier.used -= entry_size;
+                pthread_mutex_unlock(&kv->cxl_tier.lock);
+            }
+        } else {
+            pthread_mutex_unlock(&entry->lock);
+        }
+        
+        entry = prev;
+    }
+    
+    pthread_mutex_unlock(&kv->lru_lock);
+    
+    return evicted >= needed_space ? GPUIO_SUCCESS : GPUIO_ERROR_NOMEM;
+}
+
+/**
  * @brief Compact the KV cache (reclaim space, consolidate).
  */
 gpuio_error_t gpuio_dsa_kv_compact(gpuio_dsa_kv_pool_t pool,
