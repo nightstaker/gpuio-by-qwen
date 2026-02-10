@@ -6,8 +6,8 @@
 
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
-#include "gpuio.h"
-#include "gpuio_ai.h"
+#include <gpuio/gpuio.h>
+#include <gpuio/gpuio_ai.h>
 
 /* Module definition */
 static PyModuleDef gpuio_module = {

@@ -7,7 +7,7 @@
 #ifndef MEMIO_INTERNAL_H
 #define MEMIO_INTERNAL_H
 
-#include "gpuio.h"
+#include <gpuio/gpuio.h>
 #include <pthread.h>
 #include <stdint.h>
 #include <stdbool.h>

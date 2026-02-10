@@ -8,8 +8,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
-#include "gpuio.h"
-#include "gpuio_ai.h"
+#include <gpuio/gpuio.h>
+#include <gpuio/gpuio_ai.h>
 
 /* Test configuration */
 #define MAX_LATENCY_MS 100

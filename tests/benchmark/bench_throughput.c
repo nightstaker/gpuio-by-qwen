@@ -9,8 +9,8 @@
 #include <string.h>
 #include <time.h>
 #include <math.h>
-#include "gpuio.h"
-#include "gpuio_ai.h"
+#include <gpuio/gpuio.h>
+#include <gpuio/gpuio_ai.h>
 
 /* Benchmark configuration */
 #define WARMUP_ITERATIONS 10

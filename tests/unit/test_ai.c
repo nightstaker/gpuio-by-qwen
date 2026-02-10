@@ -8,8 +8,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
-#include "gpuio.h"
-#include "gpuio_ai.h"
+#include <gpuio/gpuio.h>
+#include <gpuio/gpuio_ai.h>
 
 /* Test statistics */
 static int tests_run = 0;
