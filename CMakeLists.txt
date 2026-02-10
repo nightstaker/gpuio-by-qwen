@@ -18,7 +18,6 @@ option(BUILD_SHARED_LIBS "Build shared libraries" ON)
 if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
     add_compile_options(-Wall -Wextra -Wpedantic)
     add_compile_options(-O2 -g)
-    add_compile_options(-fvisibility=hidden)
     
     if(ENABLE_COVERAGE)
         add_compile_options(--coverage)
