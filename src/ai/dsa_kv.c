@@ -126,10 +126,10 @@ ai_kv_entry_t* ai_dsa_kv_lookup(struct ai_dsa_kv* kv, uint64_t position,
         if (entry->position == position &&
             entry->layer_id == layer_id &&
             entry->head_id == head_id) {
-            pthread_mutex_lock(&entry->lock);
-            entry->ref_count++;
+            pthread_mutex_lock(&entry->lru_lock);
+            entry->lru_ref_count++;
             entry->access_count++;
-            pthread_mutex_unlock(&entry->lock);
+            pthread_mutex_unlock(&entry->lru_lock);
             pthread_mutex_unlock(&kv->hash_lock);
             
             /* Touch in LRU cache */
@@ -242,10 +242,10 @@ gpuio_error_t gpuio_dsa_kv_store(gpuio_dsa_kv_pool_t pool,
     ai_kv_entry_t* existing = ai_dsa_kv_lookup(kv, position, layer_id, head_id);
     if (existing) {
         /* Update existing entry */
-        pthread_mutex_lock(&existing->lock);
+        pthread_mutex_lock(&existing->lru_lock);
         existing->importance_score = importance_score;
-        existing->ref_count--;
-        pthread_mutex_unlock(&existing->lock);
+        existing->lru_ref_count--;
+        pthread_mutex_unlock(&existing->lru_lock);
         return GPUIO_SUCCESS;
     }
     
@@ -289,7 +289,7 @@ gpuio_error_t gpuio_dsa_kv_store(gpuio_dsa_kv_pool_t pool,
     /* Allocate and copy data */
     entry->data = malloc(size);
     if (!entry->data) {
-        pthread_mutex_destroy(&entry->lock);
+        pthread_mutex_destroy(&entry->lru_lock);
         free(entry);
         return GPUIO_ERROR_NOMEM;
     }
@@ -386,10 +386,10 @@ gpuio_error_t gpuio_dsa_kv_get_data(gpuio_dsa_kv_entry_t entry,
     
     ai_kv_entry_t* e = (ai_kv_entry_t*)entry;
     
-    pthread_mutex_lock(&e->lock);
+    pthread_mutex_lock(&e->lru_lock);
     *data = e->data;
     *size = e->size;
-    pthread_mutex_unlock(&e->lock);
+    pthread_mutex_unlock(&e->lru_lock);
     
     return GPUIO_SUCCESS;
 }
@@ -402,9 +402,9 @@ gpuio_error_t gpuio_dsa_kv_release(gpuio_dsa_kv_entry_t entry) {
     
     ai_kv_entry_t* e = (ai_kv_entry_t*)entry;
     
-    pthread_mutex_lock(&e->lock);
-    e->ref_count--;
-    pthread_mutex_unlock(&e->lock);
+    pthread_mutex_lock(&e->lru_lock);
+    e->lru_ref_count--;
+    pthread_mutex_unlock(&e->lru_lock);
     
     return GPUIO_SUCCESS;
 }
@@ -475,7 +475,7 @@ gpuio_error_t ai_dsa_kv_promote_entry(struct ai_dsa_kv* kv, ai_kv_entry_t* entry
         return GPUIO_SUCCESS;  /* Already at or above target tier */
     }
     
-    pthread_mutex_lock(&entry->lock);
+    pthread_mutex_lock(&entry->lru_lock);
     
     size_t size = entry->size;
     void* new_data = NULL;
@@ -520,7 +520,7 @@ gpuio_error_t ai_dsa_kv_promote_entry(struct ai_dsa_kv* kv, ai_kv_entry_t* entry
         entry->tier = target_tier;
     }
     
-    pthread_mutex_unlock(&entry->lock);
+    pthread_mutex_unlock(&entry->lru_lock);
     
     return new_data ? GPUIO_SUCCESS : GPUIO_ERROR_NOMEM;
 }
@@ -546,7 +546,7 @@ gpuio_error_t ai_dsa_kv_evict_entries(struct ai_dsa_kv* kv, size_t needed_space,
         lru_entry_t* prev = lru_entry_prev(lru_entry);
         
         lru_entry_lock(lru_entry);
-        if (entry->tier == tier && entry->ref_count == 0) {
+        if (entry->tier == tier && entry->lru_ref_count == 0) {
             size_t entry_size = entry->size;
             lru_entry_unlock(lru_entry);
             
@@ -569,7 +569,7 @@ gpuio_error_t ai_dsa_kv_evict_entries(struct ai_dsa_kv* kv, size_t needed_space,
             
             /* Free resources */
             if (entry->data) free(entry->data);
-            pthread_mutex_destroy(&entry->lock);
+            pthread_mutex_destroy(&entry->lru_lock);
             free(entry);
             
             kv->entry_count--;
@@ -619,7 +619,7 @@ gpuio_error_t gpuio_dsa_kv_compact(gpuio_dsa_kv_pool_t pool,
         lru_entry_t* prev = lru_entry_prev(lru_entry);
         
         lru_entry_lock(lru_entry);
-        if (entry->ref_count == 0 && 
+        if (entry->lru_ref_count == 0 && 
             entry->importance_score < kv->config.compression_threshold) {
             /* Evict this entry */
             lru_entry_unlock(lru_entry);
@@ -643,7 +643,7 @@ gpuio_error_t gpuio_dsa_kv_compact(gpuio_dsa_kv_pool_t pool,
             
             /* Free data */
             if (entry->data) free(entry->data);
-            pthread_mutex_destroy(&entry->lock);
+            pthread_mutex_destroy(&entry->lru_lock);
             free(entry);
             
             kv->entry_count--;

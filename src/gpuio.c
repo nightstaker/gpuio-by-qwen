@@ -5,6 +5,7 @@
  */
 
 #include <gpuio/gpuio.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -32,8 +33,8 @@ static const char* error_strings[] = {
 };
 
 const char* gpuio_error_string(gpuio_error_t error) {
-    int idx = -error;
-    if (idx >= 0 && idx < sizeof(error_strings) / sizeof(error_strings[0])) {
+    size_t idx = (size_t)(-error);
+    if (idx < sizeof(error_strings) / sizeof(error_strings[0])) {
         return error_strings[idx];
     }
     return "Unknown error";
@@ -200,17 +201,25 @@ gpuio_error_t gpuio_unregister_memory(gpuio_context_t ctx,
 gpuio_error_t gpuio_request_create(gpuio_context_t ctx,
                                     const gpuio_request_params_t* params,
                                     gpuio_request_t* request) {
+    (void)ctx;
+    (void)params;
+    (void)request;
     /* TODO: Implement */
     return GPUIO_ERROR_UNSUPPORTED;
 }
 
 gpuio_error_t gpuio_request_submit(gpuio_context_t ctx, gpuio_request_t request) {
+    (void)ctx;
+    (void)request;
     /* TODO: Implement */
     return GPUIO_ERROR_UNSUPPORTED;
 }
 
 gpuio_error_t gpuio_request_wait(gpuio_context_t ctx, gpuio_request_t request,
                                   uint64_t timeout_us) {
+    (void)ctx;
+    (void)request;
+    (void)timeout_us;
     /* TODO: Implement */
     return GPUIO_ERROR_UNSUPPORTED;
 }
@@ -221,12 +230,19 @@ gpuio_error_t gpuio_request_wait(gpuio_context_t ctx, gpuio_request_t request,
 
 gpuio_error_t gpuio_proxy_create(gpuio_context_t ctx, const char* uri,
                                   size_t size, gpuio_proxy_t* proxy) {
+    (void)ctx;
+    (void)uri;
+    (void)size;
+    (void)proxy;
     /* TODO: Implement */
     return GPUIO_ERROR_UNSUPPORTED;
 }
 
 gpuio_error_t gpuio_proxy_map(gpuio_context_t ctx, gpuio_proxy_t proxy,
                                void** gpu_ptr) {
+    (void)ctx;
+    (void)proxy;
+    (void)gpu_ptr;
     /* TODO: Implement */
     return GPUIO_ERROR_UNSUPPORTED;
 }

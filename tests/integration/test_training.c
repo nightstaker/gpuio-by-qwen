@@ -152,6 +152,8 @@ static int test_distributed_training_with_checkpoint(void) {
             };
             
             gpuio_training_result_t result;
+            (void)params;
+            (void)result;
             /* Note: gpuio_ai_training_step would be called here in real code */
             
             double ckpt_end = get_time_ms();
@@ -368,6 +370,8 @@ static int test_fault_tolerance_recovery(void) {
 
 /* Main test runner */
 int main(int argc, char* argv[]) {
+    (void)argc;
+    (void)argv;
     printf("============================================================\n");
     printf("gpuio Training Workload Integration Tests\n");
     printf("============================================================\n");

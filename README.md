@@ -1,5 +1,10 @@
 # gpuio API
 
+[![CI](https://github.com/nightstaker/gpuio/actions/workflows/ci.yml/badge.svg)](https://github.com/nightstaker/gpuio/actions/workflows/ci.yml)
+[![Build](https://github.com/nightstaker/gpuio/actions/workflows/build.yml/badge.svg)](https://github.com/nightstaker/gpuio/actions/workflows/build.yml)
+[![CodeQL](https://github.com/nightstaker/gpuio/actions/workflows/codeql.yml/badge.svg)](https://github.com/nightstaker/gpuio/actions/workflows/codeql.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
 GPU-Initiated IO Accelerator API for AI/ML Workloads
 
 ## Overview

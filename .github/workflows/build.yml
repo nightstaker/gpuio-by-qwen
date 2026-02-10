@@ -1,0 +1,68 @@
+name: Build
+
+on:
+  push:
+    branches-ignore: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build Verification
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Cache CMake build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.ccache
+            ${{ github.workspace }}/build
+          key: build-verify-${{ hashFiles('**/CMakeLists.txt', '**/*.c', '**/*.h') }}
+          restore-keys: |
+            build-verify-
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake build-essential ninja-build ccache
+
+      - name: Configure ccache
+        run: |
+          ccache --max-size=500M
+          ccache -z
+
+      - name: Configure CMake with warnings as errors
+        run: |
+          cmake -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_TESTS=ON \
+            -DBUILD_AI_MODULE=ON \
+            -DCMAKE_C_FLAGS="-Werror" \
+            -DCMAKE_CXX_FLAGS="-Werror" \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -G Ninja
+
+      - name: Build
+        run: cmake --build build --parallel $(nproc)
+
+      - name: Print ccache statistics
+        run: ccache -s
+
+      - name: Run tests
+        working-directory: build
+        run: ctest --output-on-failure --parallel $(nproc)
+
+      - name: Upload build artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-verify
+          path: build/
+          retention-days: 3

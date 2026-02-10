@@ -5,6 +5,7 @@
 
 #include "core_internal.h"
 #include <string.h>
+#include <stdlib.h>
 
 int nvidia_device_init(gpuio_context_t ctx, int device_id) {
     (void)ctx; (void)device_id;
@@ -126,7 +127,7 @@ core_vendor_ops_t nvidia_ops = {
     .malloc_device = nvidia_malloc_device,
     .malloc_pinned = nvidia_malloc_pinned,
     .free = nvidia_free,
-    .memcpy = nvidia_memcpy,
+    .memcpy_fn = nvidia_memcpy,
     .register_memory = nvidia_register_memory,
     .unregister_memory = nvidia_unregister_memory,
     .stream_create = nvidia_stream_create,

@@ -1,0 +1,141 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build Release Artifacts
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Cache CMake build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.ccache
+            ${{ github.workspace }}/build
+          key: release-${{ hashFiles('**/CMakeLists.txt', '**/*.c', '**/*.h') }}
+          restore-keys: |
+            release-
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake build-essential ninja-build ccache
+
+      - name: Configure ccache
+        run: |
+          ccache --max-size=1G
+          ccache -z
+
+      - name: Configure CMake
+        run: |
+          cmake -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_TESTS=ON \
+            -DBUILD_AI_MODULE=ON \
+            -DBUILD_SHARED_LIBS=ON \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -G Ninja
+
+      - name: Build
+        run: cmake --build build --parallel $(nproc)
+
+      - name: Run tests
+        working-directory: build
+        run: ctest --output-on-failure
+
+      - name: Install to staging directory
+        run: |
+          cmake --install build --prefix ${{ github.workspace }}/install
+
+      - name: Create release archive
+        run: |
+          mkdir -p release
+          tar czf release/gpuio-${{ github.ref_name }}-linux-x86_64.tar.gz -C install .
+
+      - name: Print ccache statistics
+        run: ccache -s
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-artifacts
+          path: release/
+          retention-days: 30
+
+  release:
+    name: Create GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: release-artifacts
+          path: release/
+
+      - name: Generate release notes
+        run: |
+          cat > RELEASE_NOTES.md << 'EOF'
+          ## gpuio ${{ github.ref_name }}
+
+          ### What's New
+          <!-- Add release highlights here -->
+
+          ### Installation
+
+          #### Pre-built Binaries (Linux x86_64)
+          ```bash
+          tar xzf gpuio-${{ github.ref_name }}-linux-x86_64.tar.gz -C /usr/local
+          ```
+
+          #### Build from Source
+          ```bash
+          cmake -B build -DCMAKE_BUILD_TYPE=Release
+          cmake --build build
+          sudo cmake --install build
+          ```
+
+          ### Assets
+          - Source code (zip)
+          - Source code (tar.gz)
+          - Pre-built binaries for Linux x86_64
+
+          ### Checksums
+          EOF
+          
+          cd release
+          for f in *; do
+            echo "\`$f\`: $(sha256sum $f | cut -d' ' -f1)" >> ../RELEASE_NOTES.md
+          done
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          body_path: RELEASE_NOTES.md
+          files: |
+            release/*.tar.gz
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -27,6 +27,10 @@ static double get_time_ms(void) {
     return get_time_us() / 1000.0;
 }
 
+/* Suppress unused function warning - available for future benchmarks */
+typedef double (*get_time_ms_func_t)(void);
+static const get_time_ms_func_t __attribute__((unused)) _unused_get_time_ms = get_time_ms;
+
 /* Statistics */
 typedef struct {
     double min;
@@ -84,8 +88,8 @@ static void bench_memio_memcpy(void) {
     gpuio_context_t ctx;
     gpuio_init(&ctx, NULL);
     
-    /* Test different sizes */
-    size_t sizes[] = {4 KB, 64 KB, 1 MB, 16 MB, 256 MB};
+    /* Test different sizes (in bytes) */
+    size_t sizes[] = {4096, 65536, 1048576, 16777216, 268435456};
     int num_sizes = sizeof(sizes) / sizeof(sizes[0]);
     
     for (int s = 0; s < num_sizes; s++) {
@@ -348,6 +352,8 @@ static void bench_engram_query(void) {
  * ============================================================================ */
 
 int main(int argc, char* argv[]) {
+    (void)argc;
+    (void)argv;
     printf("============================================================\n");
     printf("gpuio Performance Benchmarks\n");
     printf("Version: %s\n", gpuio_get_version_string());

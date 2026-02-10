@@ -206,6 +206,7 @@ typedef struct {
     gpuio_mem_access_t access;
     int gpu_id;
     bool registered;
+    void* handle;  /* Internal implementation handle */
 } gpuio_memory_region_t;
 
 /* Allocation */

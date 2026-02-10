@@ -59,17 +59,26 @@ gpuio_error_t gpuio_stream_create(gpuio_context_t ctx, gpuio_stream_t* stream,
 gpuio_error_t gpuio_stream_destroy(gpuio_context_t ctx, gpuio_stream_t stream) {
     if (!ctx || !stream) return GPUIO_ERROR_INVALID_ARG;
     if (!ctx->initialized) return GPUIO_ERROR_NOT_INITIALIZED;
-    
+
     core_stream_t* internal = (core_stream_t*)stream;
-    
+
     if (current_vendor_ops && current_vendor_ops->stream_destroy) {
         current_vendor_ops->stream_destroy(ctx, internal);
     }
-    
+
     pthread_mutex_destroy(&internal->lock);
+
+    /* Remove from ctx->streams array */
+    pthread_mutex_lock(&ctx->streams_lock);
+    int id = internal->id;
+    if (id >= 0 && id < ctx->num_streams && ctx->streams[id] == internal) {
+        ctx->streams[id] = NULL;
+    }
     internal->id = -1;
+    pthread_mutex_unlock(&ctx->streams_lock);
+
     free(internal);
-    
+
     return GPUIO_SUCCESS;
 }
 

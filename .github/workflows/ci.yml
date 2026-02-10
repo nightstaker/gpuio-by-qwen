@@ -1,0 +1,123 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: ${{ matrix.name }} (${{ matrix.build_type }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Ubuntu with GCC
+          - name: Ubuntu GCC
+            os: ubuntu-latest
+            compiler: gcc
+            cc: gcc
+            cxx: g++
+            build_type: Release
+          - name: Ubuntu GCC
+            os: ubuntu-latest
+            compiler: gcc
+            cc: gcc
+            cxx: g++
+            build_type: Debug
+          # Ubuntu with Clang
+          - name: Ubuntu Clang
+            os: ubuntu-latest
+            compiler: clang
+            cc: clang
+            cxx: clang++
+            build_type: Release
+          - name: Ubuntu Clang
+            os: ubuntu-latest
+            compiler: clang
+            cc: clang
+            cxx: clang++
+            build_type: Debug
+          # macOS with Clang
+          - name: macOS Clang
+            os: macos-latest
+            compiler: clang
+            cc: clang
+            cxx: clang++
+            build_type: Release
+          - name: macOS Clang
+            os: macos-latest
+            compiler: clang
+            cc: clang
+            cxx: clang++
+            build_type: Debug
+
+    env:
+      CC: ${{ matrix.cc }}
+      CXX: ${{ matrix.cxx }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Cache CMake build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.ccache
+            ${{ github.workspace }}/build
+          key: ${{ runner.os }}-${{ matrix.compiler }}-${{ matrix.build_type }}-${{ hashFiles('**/CMakeLists.txt', '**/*.c', '**/*.h') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ matrix.compiler }}-${{ matrix.build_type }}-
+            ${{ runner.os }}-${{ matrix.compiler }}-
+            ${{ runner.os }}-
+
+      - name: Install dependencies (Ubuntu)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake build-essential ninja-build ccache
+
+      - name: Install dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install cmake ninja ccache
+
+      - name: Configure ccache
+        run: |
+          ccache --max-size=500M
+          ccache -z
+
+      - name: Configure CMake
+        run: |
+          cmake -B build \
+            -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
+            -DBUILD_TESTS=ON \
+            -DBUILD_AI_MODULE=ON \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -G Ninja
+
+      - name: Build
+        run: cmake --build build --parallel $(nproc || sysctl -n hw.ncpu)
+
+      - name: Print ccache statistics
+        run: ccache -s
+
+      - name: Run tests
+        working-directory: build
+        run: ctest --output-on-failure --parallel $(nproc || sysctl -n hw.ncpu)
+
+      - name: Upload build artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-${{ matrix.os }}-${{ matrix.compiler }}-${{ matrix.build_type }}
+          path: build/
+          retention-days: 7

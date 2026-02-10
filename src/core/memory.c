@@ -96,8 +96,8 @@ gpuio_error_t gpuio_free(gpuio_context_t ctx, void* ptr) {
         }
     }
     
-    free(ptr);
     CORE_LOG(ctx, GPUIO_LOG_DEBUG, "Freed memory at %p", ptr);
+    free(ptr);
     return GPUIO_SUCCESS;
 }
 
@@ -182,8 +182,8 @@ gpuio_error_t gpuio_memcpy(gpuio_context_t ctx, void* dst, const void* src,
     if (!ctx->initialized) return GPUIO_ERROR_NOT_INITIALIZED;
     if (!dst || !src) return GPUIO_ERROR_INVALID_ARG;
     
-    if (current_vendor_ops && current_vendor_ops->memcpy) {
-        if (current_vendor_ops->memcpy(ctx, dst, src, size, stream) == 0) {
+    if (current_vendor_ops && current_vendor_ops->memcpy_fn) {
+        if (current_vendor_ops->memcpy_fn(ctx, dst, src, size, stream) == 0) {
             pthread_mutex_lock(&ctx->stats_lock);
             ctx->stats.bytes_written += size;
             pthread_mutex_unlock(&ctx->stats_lock);

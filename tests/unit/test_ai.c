@@ -293,8 +293,8 @@ TEST(dsa_kv_stats) {
     ASSERT_EQ(err, GPUIO_SUCCESS);
     
     /* Stats should be initialized */
-    ASSERT(stats.total_hits >= 0);
-    ASSERT(stats.total_misses >= 0);
+    ASSERT(stats.hit_rate >= 0.0);
+    ASSERT(stats.hit_rate <= 1.0);
     ASSERT(stats.hit_rate >= 0.0);
     ASSERT(stats.hit_rate <= 1.0);
     
@@ -548,8 +548,8 @@ TEST(engram_stats) {
     gpuio_error_t err = gpuio_engram_get_stats(pool, &stats);
     ASSERT_EQ(err, GPUIO_SUCCESS);
     
-    ASSERT(stats.total_queries >= 0);
-    ASSERT(stats.cache_hits >= 0);
+    ASSERT(stats.total_queries <= stats.total_queries + 1);  /* Always true, stats are unsigned */
+    ASSERT(stats.cache_hits <= stats.total_queries);  /* Cache hits cannot exceed total queries */
     ASSERT(stats.avg_query_latency_us >= 0);
     
     gpuio_engram_pool_destroy(pool);
@@ -600,6 +600,8 @@ static void print_header(const char* title) {
 }
 
 int main(int argc, char* argv[]) {
+    (void)argc;
+    (void)argv;
     printf("gpuio AI/ML Extensions Unit Tests\n");
     printf("Version: %s\n", gpuio_get_version_string());
     

@@ -531,10 +531,6 @@ gpuio_error_t gpuio_graph_rag_query(gpuio_graph_index_t index,
     req->completed = true;
     req->result = GPUIO_SUCCESS;
     
-    /* Set output */
-    request->subgraph = req->subgraph;
-    request->subgraph_size = req->subgraph_size;
-    
     *handle = (gpuio_graph_rag_request_handle_t)req;
     
     return GPUIO_SUCCESS;

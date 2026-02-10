@@ -9,8 +9,15 @@ option(BUILD_INTEGRATION_TESTS "Build integration tests" ON)
 option(BUILD_BENCHMARKS "Build benchmarks" ON)
 option(ENABLE_COVERAGE "Enable code coverage" OFF)
 
-# Find gpuio library
-find_package(gpuio REQUIRED PATHS ${CMAKE_SOURCE_DIR}/..)
+# Check if we're building as part of the main project or standalone
+if(TARGET gpuio)
+    # Building as subdirectory - use the existing gpuio target
+    message(STATUS "Tests: Using gpuio target from parent project")
+else()
+    # Building standalone - find the installed gpuio package
+    find_package(gpuio REQUIRED PATHS ${CMAKE_SOURCE_DIR}/..)
+    message(STATUS "Tests: Using find_package for standalone build")
+endif()
 
 # Compiler flags
 set(CMAKE_C_STANDARD 11)
@@ -26,14 +33,21 @@ if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
     endif()
 endif()
 
-# Include directories
-include_directories(
-    ${CMAKE_SOURCE_DIR}/../include
-    ${CMAKE_SOURCE_DIR}/../include/gpuio
-)
-
-# Link directories
-link_directories(${CMAKE_SOURCE_DIR}/../lib)
+# Include directories - handle both in-tree and standalone builds
+if(TARGET gpuio)
+    # In-tree build: CMAKE_SOURCE_DIR points to main project root
+    include_directories(
+        ${CMAKE_SOURCE_DIR}/include
+        ${CMAKE_SOURCE_DIR}/include/gpuio
+    )
+else()
+    # Standalone build: CMAKE_SOURCE_DIR points to tests dir
+    include_directories(
+        ${CMAKE_SOURCE_DIR}/../include
+        ${CMAKE_SOURCE_DIR}/../include/gpuio
+    )
+    link_directories(${CMAKE_SOURCE_DIR}/../lib)
+endif()
 
 # ============================================================================
 # Unit Tests

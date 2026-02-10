@@ -30,7 +30,6 @@ target_compile_features(ai_module PRIVATE c_std_11)
 
 # Compiler options
 target_compile_options(ai_module PRIVATE
-    -fvisibility=hidden
     -fPIC
 )
 

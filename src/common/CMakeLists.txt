@@ -43,8 +43,8 @@ if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
     )
 endif()
 
-# Set visibility
-target_compile_options(common_utils PRIVATE -fvisibility=hidden)
+# Set PIC for shared library compatibility
+target_compile_options(common_utils PRIVATE -fPIC)
 
 # Export variables to parent scope
 set(COMMON_UTILS_LIBRARY common_utils PARENT_SCOPE)

@@ -5,6 +5,7 @@
 
 #include "core_internal.h"
 #include <string.h>
+#include <stdlib.h>
 
 int amd_device_init(gpuio_context_t ctx, int device_id) {
     (void)ctx; (void)device_id;
@@ -126,7 +127,7 @@ core_vendor_ops_t amd_ops = {
     .malloc_device = amd_malloc_device,
     .malloc_pinned = amd_malloc_pinned,
     .free = amd_free,
-    .memcpy = amd_memcpy,
+    .memcpy_fn = amd_memcpy,
     .register_memory = amd_register_memory,
     .unregister_memory = amd_unregister_memory,
     .stream_create = amd_stream_create,

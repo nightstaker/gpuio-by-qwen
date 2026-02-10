@@ -12,6 +12,7 @@
 
 #include "ai_internal.h"
 #include "lru_cache.h"
+#include "vector_ops.h"
 
 #ifdef __cplusplus
 extern "C" {

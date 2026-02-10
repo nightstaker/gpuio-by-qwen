@@ -194,10 +194,10 @@ ai_engram_entry_t* ai_engram_lookup(struct ai_engram* engram, uint64_t engram_id
     ai_engram_entry_t* entry = engram->hash_table[hash];
     while (entry) {
         if (entry->engram_id == engram_id) {
-            pthread_mutex_lock(&entry->lock);
-            entry->ref_count++;
+            pthread_mutex_lock(&entry->lru_lock);
+            entry->lru_ref_count++;
             entry->access_count++;
-            pthread_mutex_unlock(&entry->lock);
+            pthread_mutex_unlock(&entry->lru_lock);
             pthread_mutex_unlock(&engram->hash_lock);
             
             /* Touch in LRU cache */
@@ -267,9 +267,9 @@ gpuio_error_t ai_engram_vector_search(struct ai_engram* engram,
     int result_count = (count < top_k) ? count : top_k;
     for (int i = 0; i < result_count; i++) {
         results[i] = scores[i].entry;
-        pthread_mutex_lock(&results[i]->lock);
-        results[i]->ref_count++;
-        pthread_mutex_unlock(&results[i]->lock);
+        pthread_mutex_lock(&results[i]->lru_lock);
+        results[i]->lru_ref_count++;
+        pthread_mutex_unlock(&results[i]->lru_lock);
     }
     *num_results = result_count;
     
@@ -345,11 +345,11 @@ gpuio_error_t gpuio_engram_write(gpuio_engram_pool_t pool,
     /* Check if engram already exists */
     ai_engram_entry_t* existing = ai_engram_lookup(engram, engram_data->engram_id);
     if (existing) {
-        pthread_mutex_lock(&existing->lock);
+        pthread_mutex_lock(&existing->lru_lock);
         existing->version = engram_data->version;
         existing->importance_score = engram_data->importance_score;
-        existing->ref_count--;
-        pthread_mutex_unlock(&existing->lock);
+        existing->lru_ref_count--;
+        pthread_mutex_unlock(&existing->lru_lock);
         return GPUIO_SUCCESS;
     }
     
@@ -373,19 +373,19 @@ gpuio_error_t gpuio_engram_write(gpuio_engram_pool_t pool,
     if (engram_data->size > 0 && engram_data->data) {
         entry->data = malloc(engram_data->size);
         if (!entry->data) {
-            pthread_mutex_destroy(&entry->lock);
+            pthread_mutex_destroy(&entry->lru_lock);
             free(entry);
             return GPUIO_ERROR_NOMEM;
         }
         memcpy(entry->data, engram_data->data, engram_data->size);
     }
-    
+
     /* Allocate and copy embedding */
     if (engram_data->embedding_dim > 0 && engram_data->embedding) {
         entry->embedding = malloc(engram_data->embedding_dim * sizeof(float));
         if (!entry->embedding) {
             free(entry->data);
-            pthread_mutex_destroy(&entry->lock);
+            pthread_mutex_destroy(&entry->lru_lock);
             free(entry);
             return GPUIO_ERROR_NOMEM;
         }
@@ -516,10 +516,10 @@ gpuio_error_t gpuio_engram_get_data(gpuio_engram_handle_t handle,
     
     ai_engram_entry_t* entry = (ai_engram_entry_t*)handle;
     
-    pthread_mutex_lock(&entry->lock);
+    pthread_mutex_lock(&entry->lru_lock);
     *data = entry->data;
     *size = entry->size;
-    pthread_mutex_unlock(&entry->lock);
+    pthread_mutex_unlock(&entry->lru_lock);
     
     return GPUIO_SUCCESS;
 }
@@ -532,9 +532,9 @@ gpuio_error_t gpuio_engram_release(gpuio_engram_handle_t handle) {
     
     ai_engram_entry_t* entry = (ai_engram_entry_t*)handle;
     
-    pthread_mutex_lock(&entry->lock);
-    entry->ref_count--;
-    pthread_mutex_unlock(&entry->lock);
+    pthread_mutex_lock(&entry->lru_lock);
+    entry->lru_ref_count--;
+    pthread_mutex_unlock(&entry->lru_lock);
     
     return GPUIO_SUCCESS;
 }
@@ -617,8 +617,8 @@ gpuio_error_t gpuio_engram_query_batch(gpuio_engram_pool_t pool,
 gpuio_error_t ai_engram_store_entry(struct ai_engram* engram, ai_engram_entry_t* entry) {
     if (!engram || !entry) return GPUIO_ERROR_INVALID_ARG;
     
-    pthread_mutex_lock(&entry->lock);
-    
+    pthread_mutex_lock(&entry->lru_lock);
+
     /* Try to store in HBM first if that's the target tier */
     if (entry->tier == GPUIO_ENGRAM_TIER_HBM) {
         pthread_mutex_lock(&engram->hbm_tier.lock);
@@ -630,14 +630,14 @@ gpuio_error_t ai_engram_store_entry(struct ai_engram* engram, ai_engram_entry_t*
             }
             engram->hbm_tier.used += entry->size;
             pthread_mutex_unlock(&engram->hbm_tier.lock);
-            pthread_mutex_unlock(&entry->lock);
+            pthread_mutex_unlock(&entry->lru_lock);
             return GPUIO_SUCCESS;
         }
         pthread_mutex_unlock(&engram->hbm_tier.lock);
         /* Fall through to CXL */
         entry->tier = GPUIO_ENGRAM_TIER_CXL;
     }
-    
+
     /* Try CXL tier */
     if (entry->tier == GPUIO_ENGRAM_TIER_CXL) {
         pthread_mutex_lock(&engram->cxl_tier.lock);
@@ -649,28 +649,28 @@ gpuio_error_t ai_engram_store_entry(struct ai_engram* engram, ai_engram_entry_t*
             }
             engram->cxl_tier.used += entry->size;
             pthread_mutex_unlock(&engram->cxl_tier.lock);
-            pthread_mutex_unlock(&entry->lock);
+            pthread_mutex_unlock(&entry->lru_lock);
             return GPUIO_SUCCESS;
         }
         pthread_mutex_unlock(&engram->cxl_tier.lock);
         /* Fall through to remote */
         entry->tier = GPUIO_ENGRAM_TIER_REMOTE;
     }
-    
+
     /* Store in remote tier */
     pthread_mutex_lock(&engram->remote_tier.lock);
     entry->storage_offset = engram->remote_tier.used;
     engram->remote_tier.used += entry->size;
     pthread_mutex_unlock(&engram->remote_tier.lock);
-    
+
     /* If async writes enabled, queue for background write */
     if (engram->config.async_writes && entry->data) {
         pthread_mutex_lock(&engram->write_buffer_lock);
         /* In production: copy to write buffer for background flush */
         pthread_mutex_unlock(&engram->write_buffer_lock);
     }
-    
-    pthread_mutex_unlock(&entry->lock);
+
+    pthread_mutex_unlock(&entry->lru_lock);
     
     pthread_mutex_lock(&engram->stats_lock);
     if (entry->tier == GPUIO_ENGRAM_TIER_HBM) {
@@ -693,19 +693,19 @@ gpuio_error_t ai_engram_store_entry(struct ai_engram* engram, ai_engram_entry_t*
 gpuio_error_t ai_engram_load_entry(struct ai_engram* engram, ai_engram_entry_t* entry) {
     if (!engram || !entry) return GPUIO_ERROR_INVALID_ARG;
     
-    pthread_mutex_lock(&entry->lock);
-    
+    pthread_mutex_lock(&entry->lru_lock);
+
     /* Data already in memory, just return */
     if (entry->data) {
-        pthread_mutex_unlock(&entry->lock);
+        pthread_mutex_unlock(&entry->lru_lock);
         lru_cache_touch(engram->lru_cache, (lru_entry_t*)entry);
         return GPUIO_SUCCESS;
     }
-    
+
     /* Allocate memory for data */
     entry->data = malloc(entry->size);
     if (!entry->data) {
-        pthread_mutex_unlock(&entry->lock);
+        pthread_mutex_unlock(&entry->lru_lock);
         return GPUIO_ERROR_NOMEM;
     }
     
@@ -736,15 +736,15 @@ gpuio_error_t ai_engram_load_entry(struct ai_engram* engram, ai_engram_entry_t* 
             /* For now, mark as not found if not cached */
             free(entry->data);
             entry->data = NULL;
-            pthread_mutex_unlock(&entry->lock);
+            pthread_mutex_unlock(&entry->lru_lock);
             return GPUIO_ERROR_NOT_FOUND;
-            
+
         default:
-            pthread_mutex_unlock(&entry->lock);
+            pthread_mutex_unlock(&entry->lru_lock);
             return GPUIO_ERROR_INVALID_ARG;
     }
-    
-    pthread_mutex_unlock(&entry->lock);
+
+    pthread_mutex_unlock(&entry->lru_lock);
     lru_cache_touch(engram->lru_cache, (lru_entry_t*)entry);
     
     return GPUIO_SUCCESS;
@@ -762,12 +762,12 @@ gpuio_error_t gpuio_engram_invalidate(gpuio_engram_pool_t pool,
     
     ai_engram_entry_t* entry = ai_engram_lookup(engram, engram_id);
     if (entry) {
-        pthread_mutex_lock(&entry->lock);
+        pthread_mutex_lock(&entry->lru_lock);
         if (entry->version < min_version) {
             entry->version = min_version;
         }
-        entry->ref_count--;
-        pthread_mutex_unlock(&entry->lock);
+        entry->lru_ref_count--;
+        pthread_mutex_unlock(&entry->lru_lock);
         return GPUIO_SUCCESS;
     }
     
