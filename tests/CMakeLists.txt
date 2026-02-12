@@ -64,6 +64,24 @@ if(BUILD_UNIT_TESTS)
     )
     target_link_libraries(test_ai gpuio)
     add_test(NAME AIUnitTests COMMAND test_ai)
+    
+    add_executable(test_memory
+        unit/test_memory.c
+    )
+    target_link_libraries(test_memory gpuio)
+    add_test(NAME MemoryUnitTests COMMAND test_memory)
+    
+    add_executable(test_stream
+        unit/test_stream.c
+    )
+    target_link_libraries(test_stream gpuio)
+    add_test(NAME StreamUnitTests COMMAND test_stream)
+    
+    add_executable(test_request
+        unit/test_request.c
+    )
+    target_link_libraries(test_request gpuio)
+    add_test(NAME RequestUnitTests COMMAND test_request)
 endif()
 
 # ============================================================================
@@ -81,6 +99,12 @@ if(BUILD_INTEGRATION_TESTS)
     )
     target_link_libraries(test_inference gpuio)
     add_test(NAME InferenceIntegration COMMAND test_inference)
+    
+    add_executable(test_memio
+        integration/test_memio.c
+    )
+    target_link_libraries(test_memio gpuio)
+    add_test(NAME MemIOIntegration COMMAND test_memio)
 endif()
 
 # ============================================================================
@@ -102,7 +126,7 @@ enable_testing()
 # Add custom targets
 add_custom_target(check
     COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure
-    DEPENDS test_core test_ai
+    DEPENDS test_core test_ai test_memory test_stream test_request
     COMMENT "Running all tests"
 )
 
