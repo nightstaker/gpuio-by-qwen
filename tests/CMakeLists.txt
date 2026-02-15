@@ -64,6 +64,12 @@ if(BUILD_UNIT_TESTS)
     )
     target_link_libraries(test_ai gpuio)
     add_test(NAME AIUnitTests COMMAND test_ai)
+    
+    add_executable(test_memio_zero_copy
+        unit/test_memio_zero_copy.c
+    )
+    target_link_libraries(test_memio_zero_copy gpuio)
+    add_test(NAME MemioZeroCopy COMMAND test_memio_zero_copy)
 endif()
 
 # ============================================================================
