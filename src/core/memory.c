@@ -41,9 +41,30 @@ gpuio_error_t gpuio_malloc_pinned(gpuio_context_t ctx, size_t size, void** ptr) 
         return GPUIO_ERROR_NOMEM;
     }
     
+    /* Track this mmap'd memory in the region list */
+    core_memory_region_t* internal = calloc(1, sizeof(core_memory_region_t));
+    if (!internal) {
+        munmap(*ptr, size);
+        *ptr = NULL;
+        return GPUIO_ERROR_NOMEM;
+    }
+    
+    internal->base_addr = *ptr;
+    internal->length = size;
+    internal->gpu_id = ctx->current_device;
+    internal->registered = false;
+    internal->is_pinned = true;
+    internal->is_mmap = true;
+    internal->is_zero_copy = true;
+    
+    pthread_mutex_lock(&ctx->regions_lock);
+    internal->next = ctx->regions;
+    ctx->regions = internal;
+    pthread_mutex_unlock(&ctx->regions_lock);
+    
     madvise(*ptr, size, MADV_SEQUENTIAL);
     
-    CORE_LOG(ctx, GPUIO_LOG_DEBUG, "Allocated %zu bytes host memory at %p", size, *ptr);
+    CORE_LOG(ctx, GPUIO_LOG_DEBUG, "Allocated %zu bytes host memory at %p (tracked)", size, *ptr);
     return GPUIO_SUCCESS;
 }
 
@@ -78,20 +99,46 @@ gpuio_error_t gpuio_free(gpuio_context_t ctx, void* ptr) {
     if (!ctx->initialized) return GPUIO_ERROR_NOT_INITIALIZED;
     if (!ptr) return GPUIO_SUCCESS;
     
+    /* Check if this memory is registered - if so, it's still in use */
     pthread_mutex_lock(&ctx->regions_lock);
     core_memory_region_t* region = ctx->regions;
+    core_memory_region_t* found_region = NULL;
     while (region) {
         if (region->base_addr == ptr) {
-            pthread_mutex_unlock(&ctx->regions_lock);
-            return GPUIO_ERROR_BUSY;
+            found_region = region;
+            break;
         }
         region = region->next;
     }
+    
+    if (found_region && found_region->is_mmap) {
+        /* This was mmap'd memory - use munmap with stored size */
+        pthread_mutex_unlock(&ctx->regions_lock);
+        CORE_LOG(ctx, GPUIO_LOG_DEBUG, "Freeing mmap-allocated memory at %p (size=%zu)", ptr, found_region->length);
+        if (munmap(ptr, found_region->length) != 0) {
+            CORE_LOG(ctx, GPUIO_LOG_WARN, "munmap failed at %p", ptr);
+            return GPUIO_ERROR_GENERAL;
+        }
+        return GPUIO_SUCCESS;
+    }
+    
+    if (found_region && found_region->is_pinned) {
+        /* Pinned memory registered via register_memory - use munmap */
+        pthread_mutex_unlock(&ctx->regions_lock);
+        CORE_LOG(ctx, GPUIO_LOG_DEBUG, "Freeing pinned memory at %p (size=%zu)", ptr, found_region->length);
+        if (munmap(ptr, found_region->length) != 0) {
+            CORE_LOG(ctx, GPUIO_LOG_WARN, "munmap failed at %p", ptr);
+            return GPUIO_ERROR_GENERAL;
+        }
+        return GPUIO_SUCCESS;
+    }
+    
     pthread_mutex_unlock(&ctx->regions_lock);
     
+    /* Check vendor ops first for non-registered memory */
     if (current_vendor_ops && current_vendor_ops->free) {
         if (current_vendor_ops->free(ctx, ptr) == 0) {
-            CORE_LOG(ctx, GPUIO_LOG_DEBUG, "Freed memory at %p", ptr);
+            CORE_LOG(ctx, GPUIO_LOG_DEBUG, "Freed memory at %p via vendor ops", ptr);
             return GPUIO_SUCCESS;
         }
     }

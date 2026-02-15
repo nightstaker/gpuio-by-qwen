@@ -51,6 +51,8 @@ typedef struct core_memory_region {
     int gpu_id;
     bool registered;
     bool is_pinned;
+    bool is_mmap;
+    bool is_zero_copy;  /* Added: flag for zero-copy memory */
     struct core_memory_region* next;
 } core_memory_region_t;
 
